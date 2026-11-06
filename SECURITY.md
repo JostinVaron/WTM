@@ -2,13 +2,18 @@
 
 ## Current security status
 
-WTM is an experimental local-network prototype, not a security-reviewed product.
-The current relay uses a self-signed TLS certificate and has no documented application
-authentication. A source audit of the active Termux server also found an unauthenticated
-HTTP control route that launches start/stop/input-routing scripts with the Termux user's
-privileges. Treat this as a privileged remote-control surface, not merely a video viewer.
-An older work-copy daemon also exposes control over plain HTTP. Neither service is ready
-for exposure to an untrusted network.
+WTM is an experimental local-network prototype, not a security-reviewed product. A
+repository-content security sweep was completed on 2026-11-06; this was not a full product
+security assessment. The current relay uses a self-signed TLS certificate and has no
+application authentication or authorization for its WebSocket, control, or log endpoints.
+A source audit of the active Termux server found that the unauthenticated HTTP control
+route can launch start/stop/input-routing scripts with the Termux user's privileges. The
+log endpoint returns recent local diagnostics, which may contain operational details.
+Treat these as privileged remote-control and information-disclosure surfaces, not merely
+a video viewer. The server binds to all interfaces. Its launcher supplies TLS material,
+but the server can fall back to plain HTTP if TLS is not configured. An older work-copy
+daemon also exposes control over plain HTTP. Neither service is ready for exposure to an
+untrusted network.
 
 Run only on a trusted, isolated LAN. Do not port-forward the service to the public
 Internet, use an untrusted hotspot, or share its private key.
