@@ -74,11 +74,15 @@ opens the HTTPS page in Chrome; WebCodecs requires a secure context. The client 
 H.264 and draws frames onto a full-screen canvas. Current default decoder preference is
 `prefer-software`, based on the observed tablet A/B test.
 
-The active server binds the web service to all interfaces and exposes an unauthenticated
-HTTP control operation that can start/stop helper scripts in the Termux context. This is
-a serious pre-release security issue; the prototype must remain on a trusted isolated
-LAN. Do not include the active server source in a public release until this control plane
-is removed or properly authenticated and reviewed. See [Security](../SECURITY.md).
+The active server binds the web service to all interfaces and exposes unauthenticated
+WebSocket input and HTTP control and log endpoints. The control operation can start/stop
+helper scripts in the Termux context; the log endpoint returns recent local diagnostics.
+This is a serious pre-release security issue; the prototype must remain on a trusted
+isolated LAN. The current launcher supplies local TLS material, but the server can fall
+back to plain HTTP if TLS is not configured, so port 8443 alone does not prove that a
+connection is encrypted. Do not include the active server source in a public release
+until these interfaces are redesigned, authenticated and reviewed. See
+[Security](../SECURITY.md).
 
 ### 5. Return input path
 
@@ -129,12 +133,11 @@ has demonstrated Bluetooth as a viable replacement for the video transport.
 
 ## Source-of-truth and deployment drift
 
-The Termux deployment tree under `$HOME/dex` and the separate
-`/home/dexuser/remote-display` work copy are not the same version. The local work copy
-contains historical Xvfb/PRoot tools and experimental files and has been explicitly
-warned against deploying without a file-by-file comparison. This documentation describes
-the active Termux architecture and separately labels historical paths. The documentation
-repository does not publish runtime code.
+The Termux deployment tree under `$HOME/dex` and the separate Linux
+`remote-display/` work copy are not the same version. The work copy contains historical
+Xvfb/PRoot tools and experimental files and must not be deployed without a file-by-file
+comparison. This documentation describes the active Termux architecture and separately
+labels historical paths. The documentation repository does not publish runtime code.
 
 ## Target architecture for a Termux-independent product
 
