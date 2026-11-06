@@ -4,21 +4,25 @@ This procedure describes the existing prototype, not a one-click installer or a
 Termux-independent product. It assumes the project has been installed manually in
 `$HOME/dex` on the source phone.
 
-## Important: this repository cannot deploy the service by itself
+The hardened runtime and its installer live in `runtime/termux/` on `main`; they
+are **published but not deployed** on the prototype phone. See
+[runtime release candidate](runtime-release-candidate.md) for what changed.
 
-The public repository is a documentation-only handoff. The following runtime files are
-not included, so cloning this repository does not create a runnable WTM installation:
+## Important: two deployment paths
 
-- `$HOME/.shortcuts/start-dex.sh` and `$HOME/.shortcuts/stop-dex.sh`;
-- `$HOME/.termux/boot/01-dex.sh`;
-- `$HOME/dex/dex.sh`, `scrcpy-phone.sh`, `server.py`, `index.html`, `panel.html`,
-  `route-input.sh`, `watchdog.sh` and `find-adb-port.py`;
-- the scrcpy server artifact and per-install TLS certificate/key.
+**Path A — published installer (source, Termux).** `main` includes
+`runtime/termux/install.sh`, which installs the hardened runtime from this
+repository: it installs Termux packages, copies the sources, downloads the
+official scrcpy server v5.0.1 with a pinned SHA-256, generates per-install
+tokens and TLS material, and installs Termux:Widget/Termux:Boot hooks. This
+path is new, has host-level automated tests and a completed security review,
+but has not been executed on the S25 yet.
 
-These are described as components of the separately installed test setup. No verified
-installer, clean-device setup procedure, or safe redistribution bundle is available.
-Do not treat example paths or commands below as proof that the omitted files can be
-obtained from this repository.
+**Path B — deployed prototype.** The service currently running on the S25 was
+installed manually before the installer existed. It remains unauthenticated
+(no login, no Origin/Host checks) and is described below as the prototype.
+The prototype will not gain the hardened behavior until it is reinstalled or
+migrated with Path A.
 
 ## Prerequisites
 
@@ -121,3 +125,37 @@ client/source metrics.
 
 Do not claim restart-proof behavior unless each case is exercised and measured on the
 published support matrix.
+
+## Published installer (source, not yet hardware-certified)
+
+`runtime/termux/install.sh` is an idempotent Termux installer that:
+
+1. verifies it runs in Termux on the source phone and detects the LAN IP for the
+   allowed host list and listener bind (override both with `WTM_ALLOWED_HOSTS` and
+   `WTM_BIND_HOST`);
+2. installs missing Termux packages (`python`, `aiohttp==3.14.5`, `openssl`, `curl`);
+3. copies the package sources into `$HOME/dex`;
+4. downloads the official scrcpy server v5.0.1 and verifies SHA-256
+   `764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536`;
+5. generates per-install viewer/admin tokens, a TLS certificate/key, a
+   `server.env` and a certificate fingerprint file under `~/.config/wtm/`
+   (never overwriting existing credentials);
+6. installs Termux:Widget shortcuts and the Termux:Boot hook.
+
+After installation the bridge requires a browser login: open
+`https://<phone-ip>:8443/`, **compare the certificate fingerprint shown on the
+login page with the value printed at install time** (`~/.config/wtm/cert-fingerprint.txt`),
+and only then enter one of the generated tokens. A mismatch means the connection may be
+intercepted: do not enter tokens. The admin token unlocks the control panel
+(`https://<phone-ip>:8443/panel`); the viewer token allows watching and input but not
+start/stop actions. Local health checks use the unauthenticated loopback-only
+`https://127.0.0.1:8443/healthz`.
+
+When the phone changes network/IP, run `bash update-network.sh` in `$HOME/dex` to
+refresh the listener bind and regenerate the certificate for the new IP, then verify
+the new fingerprint on the tablet.
+
+This installer flow has host-level automated tests and a completed security review,
+but has not been executed on the real device pair yet; run
+`bash tests/device-smoke.sh` in `$HOME/dex` after installing to certify the hardware.
+See [certification](certification.md).

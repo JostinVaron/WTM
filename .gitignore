@@ -8,6 +8,8 @@
 id_rsa
 adbkey
 adbkey.pub
+auth-tokens.json
+server.env
 
 # Device logs, local test output, and generated artifacts
 *.log

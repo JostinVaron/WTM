@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="/manifest.json">
+<title>Remote Display</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; overscroll-behavior: none;
+               touch-action: none; user-select: none; -webkit-user-select: none; }
+  #screen { position: fixed; inset: 0; width: 100vw; height: 100vh; object-fit: contain; background: #000; touch-action: none; }
+  #bar { position: fixed; top: 6px; left: 6px; display: flex; gap: 6px; align-items: center; z-index: 10;
+         font: 12px/1 monospace; color: #7fff7f; opacity: 0; pointer-events: none; transition: opacity .3s; }
+  #bar.on { opacity: 1; pointer-events: auto; }
+  #bar > * { background: rgba(0,0,0,.55); border-radius: 8px; padding: 6px 9px; border: 0; color: inherit; }
+  #bar button { font-size: 15px; color: #fff; }
+  #status { pointer-events: none; white-space: nowrap; }
+  #kbd { position: fixed; left: -100px; top: 0; width: 1px; height: 1px; opacity: 0; }
+  #start { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 20;
+           background: rgba(0,0,0,.85); color: #fff; font: 22px sans-serif; }
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<textarea id="kbd" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+<div id="bar"><span id="status">…</span><button id="bFs">⛶</button><button id="bKb">⌨</button></div>
+<div id="start">Toca para iniciar pantalla completa</div>
+<script>
+"use strict";
+const canvas = document.getElementById("screen");
+const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+const statusEl = document.getElementById("status");
+const kbd = document.getElementById("kbd");
+
+let ws = null, decoder = null, videoW = 2000, videoH = 1200;
+let needKey = true, pendingFrame = null, drawScheduled = false, flashSeen = false, flashArr = 0, flashDec = 0;
+let configEpoch = 0, reconfiguring = false;
+const IMMEDIATE = new URLSearchParams(location.search).get("raf") === "0";
+let offset = 0, bestRtt = 1e9;
+const st = { frames: 0, submitted: 0, decoded: 0, bytes: 0, dropped: 0, lat: [], dec: [], tot: [], enc: [], t0: performance.now() };
+const inflight = new Map();   // timestamp -> { arrival, srv }
+let extra = "";
+
+function clog(m) { try { fetch("/log", { method: "POST", body: m }); } catch (e) {} }
+window.addEventListener("error", (e) => clog("JSERR " + e.message + " @" + e.lineno));
+window.addEventListener("unhandledrejection", (e) => clog("JSREJECT " + (e.reason && e.reason.message || e.reason)));
+function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+const avg = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
+
+function connect() {
+  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { needKey = true; for (let i = 0; i < 6; i++) setTimeout(sync, i * 120); };
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") {
+      if (ev.data === "h") return;
+      const m = JSON.parse(ev.data);
+      if (m.type === "config") configure(m);
+      else if (m.type === "sync") {
+        const now = Date.now(), rtt = now - m.c;
+        if (rtt <= bestRtt + 2) { bestRtt = Math.min(bestRtt, rtt); offset = m.s - (m.c + rtt / 2); }
+      }
+    } else onFrame(new Uint8Array(ev.data));
+  };
+  ws.onclose = (ev) => {
+    if (decoder) { try { decoder.close(); } catch (e) {} decoder = null; }
+    if (ev.code === 4000) { extra = " | sesión abierta en otra pestaña/dispositivo"; return; }
+    fetch("/api/session", { cache: "no-store" }).then((response) => {
+      if (response.status === 401) {
+        location.replace("/login?next=/");
+        return;
+      }
+      setTimeout(connect, 700);
+    }).catch(() => setTimeout(connect, 700));
+  };
+  ws.onerror = () => ws.close();
+}
+function sync() { send({ t: "sync", c: Date.now() }); }
+
+let lastCfgMsg = null;
+const HWPARAM = new URLSearchParams(location.search).get("hw") || "prefer-software";
+let hwPref = HWPARAM === "auto" ? "prefer-software" : HWPARAM;
+
+async function configure(m) {
+  const epoch = ++configEpoch;
+  const previousCfg = lastCfgMsg;
+  const streamChanged = !previousCfg || m.codec !== previousCfg.codec ||
+    m.width !== previousCfg.width || m.height !== previousCfg.height ||
+    m.description !== previousCfg.description;
+  needKey = true;
+  reconfiguring = true;
+  inflight.clear();
+  if (decoder) { try { decoder.close(); } catch (e) {} decoder = null; }
+  if (pendingFrame) { pendingFrame.close(); pendingFrame = null; }
+  if (streamChanged && canvas.width && canvas.height) {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  lastCfgMsg = m;
+  videoW = m.width; videoH = m.height;
+  // Solo redimensionar el canvas si la resolución cambia de verdad. Asignar
+  // width/height BORRA el canvas a negro; hacerlo en cada reconfigure (al
+  // conmutar decodificador o reconectar) causaba el parpadeo negro.
+  if (canvas.width !== videoW || canvas.height !== videoH) { canvas.width = videoW; canvas.height = videoH; }
+  const cfg = { codec: m.codec, description: b64(m.description), codedWidth: videoW, codedHeight: videoH,
+                optimizeForLatency: true, hardwareAcceleration: hwPref };
+  if (typeof VideoDecoder === "undefined") { clog("VideoDecoder no disponible (se necesita Chrome en contexto seguro)"); extra = " | sin WebCodecs"; return; }
+  let sup; try { sup = await VideoDecoder.isConfigSupported(cfg); } catch (e) { sup = { supported: false }; }
+  if (epoch !== configEpoch) return;
+  if (!sup.supported) { delete cfg.hardwareAcceleration; }
+  const nextDecoder = new VideoDecoder({
+    output: (f) => {
+      if (epoch !== configEpoch || reconfiguring || decoder !== nextDecoder) { f.close(); return; }
+      const t = inflight.get(f.timestamp);
+      if (t !== undefined) { st.dec.push(performance.now() - t.arrival); st.tot.push(Date.now() - (t.srv - offset)); inflight.delete(f.timestamp); if (t.flash) { flashSeen = true; flashArr = t.arrival; flashDec = performance.now(); } }
+      st.decoded++;
+      if (pendingFrame) pendingFrame.close();
+      pendingFrame = f;
+      if (IMMEDIATE) draw();                      // draw right away: no wait for the next vsync callback
+      else if (!drawScheduled) { drawScheduled = true; requestAnimationFrame(draw); }
+    },
+    error: (e) => {
+      if (epoch !== configEpoch || decoder !== nextDecoder) return;
+      clog("decode error: " + e.message);
+      needKey = true;
+    },
+  });
+  decoder = nextDecoder;
+  decoder.configure(cfg);
+  reconfiguring = false;
+  send({ t: "idr" });
+  clog(`decoder ${m.codec} ${videoW}x${videoH} hw=${cfg.hardwareAcceleration || "default"}`);
+}
+
+setInterval(() => { if (needKey && decoder && ws && ws.readyState === 1) send({ t: "idr" }); }, 400);
+
+/* Decodificador: software por defecto. En esta tablet, forzar hardware produjo
+   colas de varios segundos; si la cola vuelve a crecer, se revierte a software. */
+let loCount = 0, lastSwitch = 0;
+function switchDecoder(pref, why) {
+  if (hwPref === pref || !lastCfgMsg) return;
+  hwPref = pref; lastSwitch = performance.now(); loCount = 0;
+  clog(`switch decoder -> ${pref} (${why})`);
+  configure(lastCfgMsg);
+}
+function checkDecoderBacklog() {
+  if (hwPref === "prefer-software" || performance.now() - lastSwitch < 4000) return;
+  const queueSize = decoder ? decoder.decodeQueueSize : 0;
+  loCount = queueSize > 8 ? loCount + 1 : 0;
+  if (loCount >= 2) switchDecoder("prefer-software", `decodeQueueSize=${queueSize}`);
+}
+setInterval(checkDecoderBacklog, 1000);
+
+function draw() {
+  drawScheduled = false;
+  if (!pendingFrame) return;
+  ctx.drawImage(pendingFrame, 0, 0, videoW, videoH);
+  if (flashSeen) { flashSeen = false; if (probe.resolve) { const r = probe.resolve; probe.resolve = null; r(performance.now()); } }
+  pendingFrame.close(); pendingFrame = null;
+}
+const probe = { on: false, want: null, resolve: null, last: null, t: 0 };
+const pcv = document.createElement("canvas"); pcv.width = pcv.height = 1;
+const pctx = pcv.getContext("2d", { willReadFrequently: true });
+
+async function latencyTest(n) {
+  clog("latencyTest start n=" + n);
+  probe.on = true;
+  const cols = [0xff0000, 0x00ff00, 0x0000ff], res = [], parts = [];
+  for (let i = 0; i < n + 3; i++) {
+    const c = cols[i % 3];
+    probe.want = [(c >> 16) & 255, (c >> 8) & 255, c & 255];
+    const t0 = performance.now();
+    const done = new Promise((r) => (probe.resolve = r));
+    send({ t: "flash", c });
+    const t1 = await Promise.race([done, new Promise((r) => setTimeout(() => r(-1), 1500))]);
+    if (t1 > 0 && i >= 3) { res.push(t1 - t0); parts.push([flashArr - t0, flashDec - flashArr, t1 - flashDec]); }
+    await new Promise((r) => setTimeout(r, 300 + Math.random() * 120));
+  }
+  probe.on = false;
+  if (!res.length) { clog(`LATENCY_TEST sin coincidencias; ultimo pixel=${JSON.stringify(probe.last)} frames=${st.decoded}`); return; }
+  const pq = (k, p) => { const v = parts.map((x) => x[k]).sort((a, b) => a - b); return v[Math.min(v.length - 1, Math.floor(p * v.length))].toFixed(0); };
+  clog(`LATENCY_PARTS p50/p90  envio->llegada=${pq(0, 0.5)}/${pq(0, 0.9)}  llegada->decodificado=${pq(1, 0.5)}/${pq(1, 0.9)}  decodificado->dibujado=${pq(2, 0.5)}/${pq(2, 0.9)} ms`);
+  res.sort((a, b) => a - b);
+  const q = (p) => res[Math.min(res.length - 1, Math.floor(p * res.length))];
+  clog(`LATENCY_TEST n=${res.length}/${n} min=${res[0].toFixed(1)} p50=${q(0.5).toFixed(1)} p90=${q(0.9).toFixed(1)} max=${res[res.length - 1].toFixed(1)} mean=${avg(res).toFixed(1)} ms  all=[${res.map((x) => x.toFixed(0)).join(",")}]`);
+}
+window.latencyTest = latencyTest;
+if (new URLSearchParams(location.search).get("lat")) setTimeout(() => latencyTest(+new URLSearchParams(location.search).get("lat") || 40), 6000);
+
+function onFrame(d) {
+  if (reconfiguring || !decoder || decoder.state !== "configured") return;
+  const isKey = (d[0] & 1) === 1, isFlash = (d[0] & 2) !== 0;
+  const dv = new DataView(d.buffer, d.byteOffset, d.byteLength);
+  const serverTs = Number(dv.getBigUint64(1)) / 1000;   // capture time (ms, server clock)
+  st.enc.push(dv.getUint32(9) / 1000);                  // capture+convert+encode time (ms)
+  const data = d.subarray(13);
+  st.frames++; st.bytes += d.length;
+  st.lat.push(Date.now() - (serverTs - offset));
+  if (needKey && !isKey) return;
+  // Cola amplia (8) para absorber ráfagas de red sin descartar; solo se descarta si
+  // el decodificador está realmente saturado (8+ frames pendientes ≈ 130 ms).
+  if (decoder.decodeQueueSize > 8 && !isKey) {
+    st.dropped++;
+    needKey = true;
+    send({ t: "idr" });
+    return;
+  }
+  if (isKey) needKey = false;
+  const ts = Math.round(performance.now() * 1000);
+  inflight.set(ts, { arrival: performance.now(), srv: serverTs, flash: isFlash });
+  st.submitted++;
+  try { decoder.decode(new EncodedVideoChunk({ type: isKey ? "key" : "delta", timestamp: ts, data })); }
+  catch (e) { needKey = true; }
+}
+
+/* Wi-Fi keep-awake: tiny bidirectional heartbeat so the tablet radio does not enter power-save (which batches packets per beacon, ~100 ms) */
+const HB = +(new URLSearchParams(location.search).get("hb") ?? 25);
+if (HB > 0) setInterval(() => { if (ws && ws.readyState === 1) ws.send('{"t":"hb"}'); }, HB);
+
+setInterval(() => {
+  const dt = (performance.now() - st.t0) / 1000;
+  const r = { fps: st.decoded / dt, mbps: st.bytes * 8 / dt / 1e6, lat: avg(st.lat), latMax: Math.max(0, ...st.lat),
+              dec: avg(st.dec), decMax: Math.max(0, ...st.dec), tot: avg(st.tot), totMax: Math.max(0, ...st.tot),
+              enc: avg(st.enc), drop: st.dropped, rtt: bestRtt };
+  statusEl.textContent = `${videoW}x${videoH} ${r.fps.toFixed(0)}fps ${r.mbps.toFixed(1)}Mbps  captura→pantalla ${r.tot.toFixed(0)}ms (enc ${r.enc.toFixed(0)}, red ${r.lat.toFixed(0)}, dec ${r.dec.toFixed(0)})${extra}`;
+  window.__stats = r;
+  if (dt >= 5) {
+    clog(`STATS in=${(st.frames/dt).toFixed(1)} fps=${r.fps.toFixed(1)} mbps=${r.mbps.toFixed(2)} enc_ms=${r.enc.toFixed(1)} net_ms=${r.lat.toFixed(1)}(max ${r.latMax.toFixed(0)}) decode_ms=${r.dec.toFixed(1)}(max ${r.decMax.toFixed(0)}) TOTAL_ms=${r.tot.toFixed(1)}(max ${r.totMax.toFixed(0)}) dropped=${r.drop} rtt=${r.rtt}`);
+    st.frames = st.submitted = st.decoded = st.bytes = st.dropped = 0; st.lat = []; st.dec = []; st.tot = []; st.enc = []; st.t0 = performance.now();
+  }
+  sync();
+}, 1000);
+
+/* ---------------- input ---------------- */
+function pos(e) {
+  const r = canvas.getBoundingClientRect(), s = Math.min(r.width / videoW, r.height / videoH);
+  const ox = (r.width - videoW * s) / 2, oy = (r.height - videoH * s) / 2;
+  return { x: Math.max(0, Math.min(videoW - 1, Math.round((e.clientX - r.left - ox) / s))),
+           y: Math.max(0, Math.min(videoH - 1, Math.round((e.clientY - r.top - oy) / s))),
+           pt: e.pointerType };
+}
+const BTN = { 0: 1, 1: 2, 2: 3 };
+const touches = new Map(); let scrollY = null, twoTap = null, primaryDown = false;
+let moveQ = null;
+function flushMove() { if (moveQ) { send({ t: "move", ...moveQ }); moveQ = null; } }
+function queueMove(p) { if (!moveQ) requestAnimationFrame(flushMove); moveQ = p; }
+
+canvas.addEventListener("pointerdown", (e) => {
+  e.preventDefault(); canvas.setPointerCapture(e.pointerId);
+  if (e.pointerType === "touch") {
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now() });
+    if (touches.size === 1) { const p = pos(e); flushMove(); send({ t: "move", ...p }); send({ t: "down", b: 1, pt: "touch" }); primaryDown = true; }
+    else if (touches.size === 2) { if (primaryDown) { send({ t: "up", b: 1, pt: "touch" }); primaryDown = false; } scrollY = null; twoTap = performance.now(); twoHoldTimer = setTimeout(toggleBar, 500); }
+  } else { const p = pos(e); flushMove(); send({ t: "move", ...p }); send({ t: "down", b: BTN[e.button] || 1, pt: "mouse" }); }
+});
+canvas.addEventListener("pointermove", (e) => {
+  e.preventDefault();
+  if (e.pointerType === "touch") {
+    if (!touches.has(e.pointerId)) return;
+    touches.set(e.pointerId, { ...touches.get(e.pointerId), x: e.clientX, y: e.clientY });
+    if (touches.size === 1) queueMove(pos(e));
+    else if (touches.size === 2) {
+      let y = 0; touches.forEach((t) => (y += t.y)); y /= 2;
+      if (scrollY !== null && Math.abs(scrollY - y) > 14) { twoTap = null; if (twoHoldTimer) { clearTimeout(twoHoldTimer); twoHoldTimer = null; } }
+      if (scrollY === null) scrollY = y;
+      const dy = scrollY - y;
+      if (Math.abs(dy) >= 24) { send({ t: "wheel", d: dy > 0 ? 1 : -1, n: Math.min(5, Math.round(Math.abs(dy) / 24)) }); scrollY = y; }
+    }
+  } else {
+    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    queueMove(pos(evs.length ? evs[evs.length - 1] : e));
+  }
+});
+function release(e) {
+  e.preventDefault();
+  if (e.pointerType === "touch") {
+    const wasTwo = touches.size === 2; touches.delete(e.pointerId);
+    if (twoHoldTimer) { clearTimeout(twoHoldTimer); twoHoldTimer = null; }
+    if (wasTwo && twoTap && performance.now() - twoTap < 350) { send({ t: "down", b: 3, pt: "touch" }); send({ t: "up", b: 3, pt: "touch" }); }  // two-finger tap = right click
+    if (touches.size === 0) { flushMove(); if (primaryDown) { send({ t: "up", b: 1, pt: "touch" }); primaryDown = false; } scrollY = null; twoTap = null; }
+  } else { flushMove(); send({ t: "up", b: BTN[e.button] || 1, pt: "mouse" }); }
+}
+canvas.addEventListener("pointerup", release);
+canvas.addEventListener("pointercancel", release);
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+canvas.addEventListener("wheel", (e) => { e.preventDefault(); send({ t: "wheel", d: e.deltaY > 0 ? -1 : 1, n: Math.min(5, Math.max(1, Math.round(Math.abs(e.deltaY) / 40))) }); }, { passive: false });
+
+const KEYMAP = { " ": "space", Enter: "Return", Backspace: "BackSpace", Tab: "Tab", Escape: "Escape", ArrowUp: "Up", ArrowDown: "Down",
+  ArrowLeft: "Left", ArrowRight: "Right", Delete: "Delete", Home: "Home", End: "End", PageUp: "Prior", PageDown: "Next",
+  Shift: "shift", Control: "ctrl", Alt: "alt", Meta: "super", CapsLock: "CapsLock", Insert: "Insert" };
+const xk = (k) => KEYMAP[k] || (k.length === 1 || /^F\d+$/.test(k) ? k : null);
+function key(e, down) {
+  if (e.target === kbd && (e.key === "Unidentified" || e.isComposing)) return;
+  const k = xk(e.key); if (!k) return;
+  e.preventDefault(); send({ t: down ? "keydown" : "keyup", k });
+}
+document.addEventListener("keydown", (e) => key(e, true));
+document.addEventListener("keyup", (e) => key(e, false));
+kbd.addEventListener("beforeinput", (e) => {   // on-screen keyboard (Android IME)
+  if (e.inputType === "insertText" && e.data) send({ t: "type", s: e.data });
+  else if (e.inputType === "deleteContentBackward") send({ t: "key", k: "BackSpace" });
+  else if (e.inputType === "insertLineBreak" || e.inputType === "insertParagraph") send({ t: "key", k: "Return" });
+  setTimeout(() => (kbd.value = ""), 0);
+});
+
+/* ---------------- ui ---------------- */
+let wakeLock = null;
+async function goFullscreen() {
+  try { if (!document.fullscreenElement) await document.documentElement.requestFullscreen({ navigationUI: "hide" }); } catch (e) {}
+  try { if (screen.orientation && screen.orientation.lock) await screen.orientation.lock("landscape"); } catch (e) {}
+  try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {}
+}
+document.getElementById("start").addEventListener("click", (e) => { e.currentTarget.remove(); goFullscreen(); });
+document.getElementById("bFs").addEventListener("click", goFullscreen);
+document.getElementById("bKb").addEventListener("click", () => { kbd.focus(); });
+
+/* Barra de estado invisible salvo que se active con presión larga de DOS dedos. */
+const bar = document.getElementById("bar");
+let barTimer = null, twoHoldTimer = null;
+function showBar(ms) {
+  bar.classList.add("on");
+  if (barTimer) clearTimeout(barTimer);
+  barTimer = setTimeout(() => bar.classList.remove("on"), ms || 4000);
+}
+function toggleBar() {
+  if (bar.classList.contains("on")) bar.classList.remove("on");
+  else showBar(4000);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { needKey = true; goFullscreen(); } });
+if (location.hash === "#auto") document.getElementById("start").remove();
+
+connect();
+</script>
+</body>
+</html>

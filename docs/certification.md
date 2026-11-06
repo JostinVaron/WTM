@@ -1,0 +1,75 @@
+# Certification of operation
+
+This page records what has been verified for the WTM release candidate, how it
+was verified, and what remains unverified. It is kept honest: checks that have
+not been performed on real hardware are listed as pending.
+
+## Automated verification performed (evidence on 2026-11-06)
+
+| Suite | Scope | Result |
+|---|---|---|
+| `runtime/termux/tests/test_server_security.py` | 18 tests: auth config validation, TLS fail-closed (expired cert rejected), Host allowlist, same-site Origin enforcement, cookie login/session, viewer/admin role separation, login throttling, content-type validation, logout, security headers, loopback-only `/healthz` | **18/18 OK** |
+| `runtime/termux/tests/test_server_live.py` | 8 tests: boots the real `server.py` process with real TLS and a real socket; healthz, login page fingerprint, protected endpoints, WebSocket gating, viewer login → status, admin control spawn, wrong Origin/Host rejection, logout | **8/8 OK** |
+| Shell syntax | `bash -n` on `dex.sh`, `install.sh`, `scrcpy-phone.sh`, `watchdog.sh`, `start_phone.sh`, `update-network.sh`, `shortcuts/start-dex.sh`, `shortcuts/stop-dex.sh`, `boot/01-dex.sh`, `tests/device-smoke.sh` | **OK** |
+| Python syntax | `py_compile` on `server.py`, `find-adb-port.py`, both test modules | **OK** |
+| Browser JavaScript | `node --check` on the inline scripts of `index.html` and `panel.html` | **OK** |
+| Supply chain | Official scrcpy server v5.0.1 downloaded from the Genymobile release and its SHA-256 compared against the pinned value in `install.sh` | **Match: `764eb6f7…53bc536`** |
+| Secret sweep | Repository scan for private keys, GitHub tokens, non-loopback IPs, serials, MACs and 64-hex tokens across the candidate sources | **Clean** (only the public scrcpy checksum matched) |
+
+Test environment for the Python suites: Python 3.14, aiohttp 3.14.5, OpenSSL
+3.5.5, Linux. The suites run the real HTTP/TLS/WebSocket stack; they do not
+exercise Termux, ADB, MediaCodec or a real Chrome client.
+
+## Independent security review
+
+A read-only security review of the complete candidate (server, clients,
+scripts, installer, tests) was performed on 2026-11-06, including adversarial
+probes (Host spoofing, Origin attacks, WebSocket handshake abuse, encoded
+paths). Result: **no CRITICAL or HIGH findings**. Two MEDIUM findings were
+fixed before publication:
+
+1. **MITM/token-theft via instructed certificate click-through** — fixed by
+   generating and displaying a per-install certificate SHA-256 fingerprint
+   (`install.sh` prints it, `/login` and the panel show it, `/healthz` reports
+   it); users are instructed to compare fingerprints on first connect and to
+   refuse mismatches.
+2. **Binding 0.0.0.0 by default** — fixed by defaulting `WTM_BIND_HOST` to the
+   detected Wi-Fi IP at install time, plus `update-network.sh` to refresh the
+   bind/certificate when the network changes. `0.0.0.0` remains an explicit,
+   documented override.
+
+LOW findings also fixed: `/log` now strips control characters, `aiohttp` is
+pinned to the tested version, and the wireless-debugging exposure is
+documented.
+
+## On-device certification (pending real-hardware run)
+
+`runtime/termux/tests/device-smoke.sh` is a non-destructive certification
+script to run in Termux on the source phone:
+
+```sh
+cd ~/dex
+bash tests/device-smoke.sh
+```
+
+It verifies the full installed chain: config permissions, token quality, TLS
+validity and fingerprint match, ADB device discovery, scrcpy server presence,
+`/healthz`, admin login, `/api/status` (including `scrcpy_alive: true` and the
+2000x1200@60 stream config), viewer 403 on control, unknown action 400,
+session-less 401s and WebSocket gating. Output and evidence are written to
+`$PREFIX/tmp/wtm-certification.log`.
+
+**Status on 2026-11-06: not yet executed on the S25.** The parent environment
+for this work has no ADB client, so the script was syntax-validated but the
+hardware run is pending. Until that run passes, do not claim the deployed
+phone is certified.
+
+## What this certification does NOT cover
+
+- Real Chrome/WebCodecs decode on the tablet (the 2K60 performance evidence
+  in [performance](performance.md) remains the reference; no new measurement
+  was taken during this work).
+- Long-duration stability, thermal behavior, reboot recovery or Wi-Fi
+  handover.
+- Any guarantee of security: passing these tests means the implemented
+  controls behave as specified, not that the system is invulnerable.
