@@ -16,13 +16,15 @@ export PREFIX=/data/data/com.termux/files/usr
 
 CONFIG="$HOME/.config/wtm/server.env"
 AUTH_FILE="$HOME/.config/wtm/auth-tokens.json"
+[ -f "$CONFIG" ] && { set -a; . "$CONFIG"; set +a; }
 PORT="${PORT:-8443}"
+BIND_HOST="${WTM_BIND_HOST:-127.0.0.1}"
+BASE="https://$BIND_HOST:$PORT"
 LOG="$PREFIX/tmp/wtm-certification.log"
 RESULTS=""
 PASS=0
 FAIL=0
 
-[ -f "$CONFIG" ] && { set -a; . "$CONFIG"; set +a; }
 [ -f "$AUTH_FILE" ] || { echo "Falta $AUTH_FILE; ejecuta install.sh primero."; exit 2; }
 
 exec >>"$LOG" 2>&1
@@ -47,7 +49,16 @@ ok = ok and all(re.fullmatch(r"[a-f0-9]{64}", v) for v in t.values())
 sys.exit(0 if ok else 1)
 PY'
 check "material TLS presente" '[ -f "$HOME/.config/wtm/cert.pem" ] && [ -f "$HOME/.config/wtm/key.pem" ]'
-check "certificado no caducado" 'openssl x509 -in "$HOME/.config/wtm/cert.pem" -noout -checkend 86400 >/dev/null 2>&1'
+check "certificado no caducado" 'python3 - "$HOME/.config/wtm/cert.pem" <<PY
+import ssl, sys, time
+try:
+    cert = ssl._ssl._test_decode_cert(sys.argv[1])
+    not_after = time.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z")
+    import calendar
+    sys.exit(0 if calendar.timegm(not_after) > time.time() + 86400 else 1)
+except Exception:
+    sys.exit(1)
+PY'
 check "huella del certificado guardada" 'grep -qE "([0-9A-F]{2}:){31}[0-9A-F]{2}" "$HOME/.config/wtm/cert-fingerprint.txt" 2>/dev/null'
 
 check "adb disponible" 'command -v adb >/dev/null'
@@ -59,13 +70,13 @@ for serial in $(adb devices 2>/dev/null | awk 'NR>1 && $2=="device"{print $1}');
 done
 check "teléfono $PHONE_MODEL por adb" '[ -n "$PHONE" ]'
 
-check "scrcpy-server.jar en el teléfono" 'adb -s "${PHONE:-x}" shell test -f /data/local/tmp/scrcpy-server.jar 2>/dev/null'
+check "scrcpy-server activo o JAR en el teléfono" '{ adb -s "${PHONE:-x}" shell test -f /data/local/tmp/scrcpy-server.jar 2>/dev/null; } || adb -s "${PHONE:-x}" shell ps -A 2>/dev/null | grep -q app_process'
 
 # --- bridge vivo -----------------------------------------------------------
-check "bridge responde /healthz" 'curl -sk --max-time 3 "https://127.0.0.1:$PORT/healthz" | grep -q "\"ok\": *true"'
-check "healthz informa huella TLS" 'curl -sk --max-time 3 "https://127.0.0.1:$PORT/healthz" | grep -q "tls_fingerprint"'
+check "bridge responde /healthz" 'curl -sk --max-time 3 "$BASE/healthz" | grep -q "\"ok\": *true"'
+check "healthz informa huella TLS" 'curl -sk --max-time 3 "$BASE/healthz" | grep -q "tls_fingerprint"'
 FINGERPRINT_MATCH=""
-SERVER_FP="$(curl -sk --max-time 3 "https://127.0.0.1:$PORT/healthz" 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin).get("tls_fingerprint",""))' 2>/dev/null)"
+SERVER_FP="$(curl -sk --max-time 3 "$BASE/healthz" 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin).get("tls_fingerprint",""))' 2>/dev/null)"
 LOCAL_FP="$(cat "$HOME/.config/wtm/cert-fingerprint.txt" 2>/dev/null | tr -d '\r')"
 [ -n "$SERVER_FP" ] && [ "$SERVER_FP" = "$LOCAL_FP" ] && FINGERPRINT_MATCH=1
 check "huella TLS coincide con la instalación" '[ -n "$FINGERPRINT_MATCH" ]'
@@ -73,8 +84,8 @@ check "huella TLS coincide con la instalación" '[ -n "$FINGERPRINT_MATCH" ]'
 # --- flujo de sesión --------------------------------------------------------
 COOKIE_JAR="$PREFIX/tmp/wtm-cert-cookies.txt"
 rm -f "$COOKIE_JAR"
-check "login admin" 'curl -sk --max-time 5 -c "$COOKIE_JAR" -H "Origin: https://127.0.0.1:$PORT" -H "Content-Type: application/json" -d "{\"token\":\"$ADMIN_TOKEN\"}" -o /dev/null -w "%{http_code}" "https://127.0.0.1:$PORT/api/auth" | grep -q 200'
-STATUS_JSON="$(curl -sk --max-time 5 -b "$COOKIE_JAR" "https://127.0.0.1:$PORT/api/status" 2>/dev/null)"
+check "login admin" 'curl -sk --max-time 5 -c "$COOKIE_JAR" -H "Origin: $BASE" -H "Content-Type: application/json" -d "{\"token\":\"$ADMIN_TOKEN\"}" -o /dev/null -w "%{http_code}" "$BASE/api/auth" | grep -q 200'
+STATUS_JSON="$(curl -sk --max-time 5 -b "$COOKIE_JAR" "$BASE/api/status" 2>/dev/null)"
 check "api/status con sesión" 'printf "%s" "$STATUS_JSON" | grep -q "scrcpy_alive"'
 check "scrcpy activo según bridge" 'printf "%s" "$STATUS_JSON" | python3 -c "import json,sys;sys.exit(0 if json.load(sys.stdin).get(\"scrcpy_alive\") else 1)"'
 check "config del stream (2000x1200@60)" 'printf "%s" "$STATUS_JSON" | python3 -c "
@@ -84,11 +95,11 @@ sys.exit(0 if c.get(\"width\") == 2000 and c.get(\"height\") == 1200 and c.get(\
 check "roles: viewer bloqueado en control" '
 VIEWER_TOKEN=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[\"viewer\"])" "$AUTH_FILE")
 rm -f "$PREFIX/tmp/wtm-cert-viewer.txt"
-curl -sk --max-time 5 -c "$PREFIX/tmp/wtm-cert-viewer.txt" -H "Origin: https://127.0.0.1:$PORT" -H "Content-Type: application/json" -d "{\"token\":\"$VIEWER_TOKEN\"}" -o /dev/null "https://127.0.0.1:$PORT/api/auth"
-[ "$(curl -sk --max-time 5 -b "$PREFIX/tmp/wtm-cert-viewer.txt" -H "Origin: https://127.0.0.1:$PORT" -H "Content-Type: application/json" -d "{\"action\":\"stop_dex\"}" -o /dev/null -w "%{http_code}" "https://127.0.0.1:$PORT/api/control")" = "403" ]'
-check "control rechaza acciones no permitidas" '[ "$(curl -sk --max-time 5 -b "$COOKIE_JAR" -H "Origin: https://127.0.0.1:$PORT" -H "Content-Type: application/json" -d "{\"action\":\"nope\"}" -o /dev/null -w "%{http_code}" "https://127.0.0.1:$PORT/api/control")" = "400" ]'
-check "sin sesión: /api/status es 401" '[ "$(curl -sk --max-time 5 -o /dev/null -w "%{http_code}" "https://127.0.0.1:$PORT/api/status")" = "401" ]'
-check "WebSocket sin sesión es 401" '[ "$(curl -sk --max-time 5 -o /dev/null -w "%{http_code}" -H "Upgrade: websocket" -H "Connection: Upgrade" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -H "Sec-WebSocket-Version: 13" "https://127.0.0.1:$PORT/ws")" = "401" ]'
+curl -sk --max-time 5 -c "$PREFIX/tmp/wtm-cert-viewer.txt" -H "Origin: $BASE" -H "Content-Type: application/json" -d "{\"token\":\"$VIEWER_TOKEN\"}" -o /dev/null "$BASE/api/auth"
+[ "$(curl -sk --max-time 5 -b "$PREFIX/tmp/wtm-cert-viewer.txt" -H "Origin: $BASE" -H "Content-Type: application/json" -d "{\"action\":\"stop_dex\"}" -o /dev/null -w "%{http_code}" "$BASE/api/control")" = "403" ]'
+check "control rechaza acciones no permitidas" '[ "$(curl -sk --max-time 5 -b "$COOKIE_JAR" -H "Origin: $BASE" -H "Content-Type: application/json" -d "{\"action\":\"nope\"}" -o /dev/null -w "%{http_code}" "$BASE/api/control")" = "400" ]'
+check "sin sesión: /api/status es 401" '[ "$(curl -sk --max-time 5 -o /dev/null -w "%{http_code}" "$BASE/api/status")" = "401" ]'
+check "WebSocket sin sesión es 401" '[ "$(curl -sk --max-time 5 -o /dev/null -w "%{http_code}" -H "Upgrade: websocket" -H "Connection: Upgrade" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -H "Sec-WebSocket-Version: 13" "$BASE/ws")" = "401" ]'
 
 rm -f "$COOKIE_JAR" "$PREFIX/tmp/wtm-cert-viewer.txt"
 

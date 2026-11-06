@@ -13,7 +13,7 @@ events travel in the reverse direction.
 > [runtime/termux/](runtime/termux/) with an installer, automated tests and a
 > completed independent security review; there is **no** signed Android app,
 > supported device matrix, or verified 60 FPS guarantee. The on-device
-> certification on the S25 is still pending. The production path requires
+> certification on the S25 was completed on 2026-11-06 (20/20 device checks, live browser session); see [certification](docs/certification.md). The production path requires
 > Termux and Wireless ADB.
 > The prototype currently deployed on the owner's phone predates the hardening
 > published here and is not identical to it; see [SECURITY.md](SECURITY.md).
@@ -93,22 +93,19 @@ is not used for video.
    that the debugging service remains enabled.
 3. **60 FPS is a cap, not an end-to-end guarantee.** The phone can produce near-60 FPS
    under some scenes while Chrome drops far below that rate under complex motion.
-4. **The deployed prototype predates the published hardening.** The prototype currently
-   deployed on the S25 uses a self-signed certificate and an unauthenticated control
-   endpoint capable of starting/stopping Termux scripts. Do not expose it to untrusted
-   networks; see [Security](SECURITY.md). The hardened runtime published in
+4. **Hardened runtime deployed and certified.** The hardened runtime in
    [runtime/termux/](runtime/termux/) (cookie auth, Origin/Host checks, TLS fail-closed,
-   admin-only control) was independently reviewed before publication and is released as
-   v0.1.1, but it is not the tree currently running on the phone, and the on-device
-   certification is still pending; see
-   [runtime release candidate](docs/runtime-release-candidate.md).
-5. **The runtime is published but not hardware-certified.** `main` includes the
-   relay source, browser clients, launcher/watchdog scripts, an idempotent Termux
-   installer that downloads the official scrcpy server with a pinned checksum, and
-   automated security tests (26/26 passing) plus a completed independent security
-   review. The on-device certification (`runtime/termux/tests/device-smoke.sh`) has
-   not been executed on the S25 yet, so the deployed prototype is not certified.
-   See [certification](docs/certification.md).
+   admin-only control) was independently reviewed before publication. On 2026-11-06 it
+   was deployed on the S25 (v0.1.2) and passed the on-device certification: 20/20
+   checks including a live browser session (login with certificate fingerprint, video
+   decode, injected input). Keep it off untrusted networks regardless;
+   see [Security](SECURITY.md) and [certification](docs/certification.md).
+5. **No signed Android app exists.** `main` includes the relay source, browser
+   clients, launcher/watchdog scripts, an idempotent Termux installer that downloads
+   the official scrcpy server with a pinned checksum, and automated security tests
+   (26/26 passing) plus a completed independent security review and the completed
+   on-device certification. This is a source-available prototype, not a Play-Store
+   style product. See [certification](docs/certification.md).
 
 ## Hardware requirements: what we can and cannot claim
 
@@ -134,7 +131,7 @@ See [licensing](LICENSING.md) and third-party notices in
 - Latest tested configuration: **S25 + Tab S6 Lite, 2000 x 1200 / configured 60 FPS**
 - Downloadable app: **not available**; source-only Termux installer in `runtime/termux/`
 - Automated tests: 26/26 passing (host), independent security review completed
-- On-device certification: **pending** (see [certification](docs/certification.md))
+- On-device certification: **completed 2026-11-06, 20/20 PASS** (see [certification](docs/certification.md))
 - CI: `.github/workflows/ci.yml`; releases: `.github/workflows/release.yml`
 - Public issue templates: available in `.github/ISSUE_TEMPLATE/`
 - Release artifacts: source packages under

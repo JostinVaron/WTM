@@ -16,7 +16,7 @@ Two runtimes exist and must not be confused:
    viewer, and keep it off untrusted networks.
 2. **The published runtime in `runtime/termux/`** is the hardened release
    candidate: cookie sessions with separate viewer/admin tokens, same-site
-   Origin enforcement, Host allowlist, TLS fail-closed startup, loopback-only
+   Origin enforcement, Host allowlist, TLS fail-closed startup, machine-local
    unauthenticated `/healthz`, fixed admin-only control actions, login
    throttling, per-install credentials and a certificate-fingerprint
    verification flow. An independent read-only security review on 2026-11-06

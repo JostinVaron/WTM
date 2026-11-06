@@ -25,9 +25,9 @@ PORT="${PORT:-8443}"
 LOG="$PREFIX/tmp/rd-bridge.log"
 
 log(){ printf '[dex] %s %s\n' "$(date '+%F %T')" "$*"; }
-bridge_up(){ curl -sk --max-time 2 "https://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; }
+bridge_up(){ curl -sk --max-time 2 "https://${WTM_BIND_HOST:-127.0.0.1}:$PORT/healthz" >/dev/null 2>&1; }
 stream_ready(){
-    curl -sk --max-time 2 "https://127.0.0.1:$PORT/healthz" 2>/dev/null |
+    curl -sk --max-time 2 "https://${WTM_BIND_HOST:-127.0.0.1}:$PORT/healthz" 2>/dev/null |
         python3 -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("scrcpy_alive") else 1)' \
             >/dev/null 2>&1
 }

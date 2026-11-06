@@ -16,7 +16,7 @@ INTERVAL="${INTERVAL:-10}"
 LOG=$PREFIX/tmp/rd-watchdog.log
 log(){ echo "[watchdog] $(date +%H:%M:%S) $*" >>"$LOG"; }
 
-bridge_up(){ curl -sk --max-time 3 "https://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; }
+bridge_up(){ curl -sk --max-time 3 "https://${WTM_BIND_HOST:-127.0.0.1}:$PORT/healthz" >/dev/null 2>&1; }
 phone_adb(){
   local model
   for s in $("$ADB" devices | awk 'NR>1 && $2=="device"{print $1}'); do

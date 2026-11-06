@@ -219,15 +219,28 @@ def origin_is_same_site(request):
     return origin == f"https://{request.host}"
 
 
-def is_loopback_peer(request):
+def is_local_peer(request):
+    """True when the request comes from this same machine: loopback, or the
+    peer address equals the local address the listener is bound to.
+
+    The health endpoint must stay machine-local even when the listener is
+    bound to the Wi-Fi IP (the hardened default). A peer whose source IP
+    equals the bound IP is accepted: healthz returns only non-sensitive
+    state (ok, scrcpy_alive, the public certificate fingerprint), so a
+    blind source-spoofed request gains nothing actionable. See
+    docs/threat-model.md for the residual-risk note."""
     try:
         peer = ipaddress.ip_address(request.remote)
-        return peer.is_loopback or (
-            peer.version == 6 and peer.ipv4_mapped is not None
-            and peer.ipv4_mapped.is_loopback
-        )
     except (TypeError, ValueError):
         return False
+    if peer.is_loopback:
+        return True
+    if peer.version == 6 and peer.ipv4_mapped is not None and peer.ipv4_mapped.is_loopback:
+        return True
+    transport = request.transport
+    sockname = transport.get_extra_info("sockname") if transport else None
+    local_ip = sockname[0] if isinstance(sockname, tuple) and sockname else None
+    return str(peer) == local_ip
 
 
 @web.middleware
@@ -238,7 +251,7 @@ async def security_middleware(request, handler):
     if not request.secure:
         raise web.HTTPUpgradeRequired(text="HTTPS is required")
     if request.path == "/healthz":
-        if request.method != "GET" or not is_loopback_peer(request):
+        if request.method != "GET" or not is_local_peer(request):
             raise web.HTTPForbidden(text="Loopback health checks only")
     elif request.path == "/api/auth":
         if request.method != "POST" or not origin_is_same_site(request):

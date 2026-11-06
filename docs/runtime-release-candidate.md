@@ -15,7 +15,7 @@ phone. Licensing: [PolyForm Noncommercial 1.0.0](../LICENSE) for software,
 | Control endpoint | Any action, shell string routing | Admin-only; two fixed actions (`start_dex`, `stop_dex`); JSON content type required |
 | Transport | HTTPS with optional HTTP fallback | HTTPS-only; server refuses to start without valid, unexpired TLS material |
 | Host/Origin | Any host accepted, bound to 0.0.0.0 | Host allowlist (`WTM_ALLOWED_HOSTS`); same-site Origin required for POST/WS |
-| Health checks | `/stats`, `/api/status` used by scripts | New `/healthz` (loopback-only, no auth) used by scripts; `/api/*` requires a session |
+| Health checks | `/stats`, `/api/status` used by scripts | New `/healthz` (machine-local, no auth) used by scripts; `/api/*` requires a session |
 | Secrets | Shared cert/key inside the project tree | Generated per install under `~/.config/wtm/` (tokens, cert, key, `server.env`), outside the repository |
 | Certificate trust | Click-through certificate warning | Per-install SHA-256 fingerprint shown at install, on `/login`, in the panel and on `/healthz`; users must compare on first connect |
 | Listener | Bound to 0.0.0.0 | Binds to the detected Wi-Fi IP by default; `update-network.sh` refreshes bind and certificate when the network changes; `0.0.0.0` only as an explicit override |
@@ -61,9 +61,9 @@ Genymobile under Apache-2.0; WTM is licensed as described in
 - scrcpy server checksum verified against the upstream release asset.
 
 The tests run on a host Python 3.14 with aiohttp 3.14.5; they do not exercise
-Termux, ADB, MediaCodec or a real client. See
-[certification](certification.md) for the full evidence table and the pending
-on-device run.
+Termux, ADB, MediaCodec or a real client. The on-device certification covers
+those and passed on the S25 on 2026-11-06; see
+[certification](certification.md) for the full evidence table.
 
 ## Publication status
 
@@ -74,9 +74,11 @@ The candidate sources were merged to `main` and published after:
 2. **Independent security review** — completed; no CRITICAL/HIGH findings.
    The two MEDIUM findings (certificate click-through MITM path, 0.0.0.0
    default bind) and the LOW findings were fixed and re-tested.
-3. **On-device acceptance** — still pending. The `device-smoke.sh`
-   certification has not been executed on the S25, so the published material
-   labels the runtime as tested-in-host, not hardware-certified.
+3. **On-device acceptance** — completed 2026-11-06. v0.1.2 was installed on
+   the S25 and passed `device-smoke.sh` 20/20, including a live browser
+   session with fingerprint-verified login, video decode and injected input.
+   The runtime is hardware-certified for the tested pair, not for arbitrary
+   devices.
 
 Do not claim this code is "impenetrable" or "secure". It has concrete,
 documented controls and passing tests for those controls, nothing more.

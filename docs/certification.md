@@ -8,7 +8,7 @@ not been performed on real hardware are listed as pending.
 
 | Suite | Scope | Result |
 |---|---|---|
-| `runtime/termux/tests/test_server_security.py` | 18 tests: auth config validation, TLS fail-closed (expired cert rejected), Host allowlist, same-site Origin enforcement, cookie login/session, viewer/admin role separation, login throttling, content-type validation, logout, security headers, loopback-only `/healthz` | **18/18 OK** |
+| `runtime/termux/tests/test_server_security.py` | 18 tests: auth config validation, TLS fail-closed (expired cert rejected), Host allowlist, same-site Origin enforcement, cookie login/session, viewer/admin role separation, login throttling, content-type validation, logout, security headers, machine-local `/healthz` | **18/18 OK** |
 | `runtime/termux/tests/test_server_live.py` | 8 tests: boots the real `server.py` process with real TLS and a real socket; healthz, login page fingerprint, protected endpoints, WebSocket gating, viewer login → status, admin control spawn, wrong Origin/Host rejection, logout | **8/8 OK** |
 | Shell syntax | `bash -n` on `dex.sh`, `install.sh`, `scrcpy-phone.sh`, `watchdog.sh`, `start_phone.sh`, `update-network.sh`, `shortcuts/start-dex.sh`, `shortcuts/stop-dex.sh`, `boot/01-dex.sh`, `tests/device-smoke.sh` | **OK** |
 | Python syntax | `py_compile` on `server.py`, `find-adb-port.py`, both test modules | **OK** |
@@ -42,7 +42,7 @@ LOW findings also fixed: `/log` now strips control characters, `aiohttp` is
 pinned to the tested version, and the wireless-debugging exposure is
 documented.
 
-## On-device certification (pending real-hardware run)
+## On-device certification (completed on the S25)
 
 `runtime/termux/tests/device-smoke.sh` is a non-destructive certification
 script to run in Termux on the source phone:
@@ -55,14 +55,24 @@ bash tests/device-smoke.sh
 It verifies the full installed chain: config permissions, token quality, TLS
 validity and fingerprint match, ADB device discovery, scrcpy server presence,
 `/healthz`, admin login, `/api/status` (including `scrcpy_alive: true` and the
-2000x1200@60 stream config), viewer 403 on control, unknown action 400,
-session-less 401s and WebSocket gating. Output and evidence are written to
+stream config), viewer 403 on control, unknown action 400, session-less 401s
+and WebSocket gating. Output and evidence are written to
 `$PREFIX/tmp/wtm-certification.log`.
 
-**Status on 2026-11-06: not yet executed on the S25.** The parent environment
-for this work has no ADB client, so the script was syntax-validated but the
-hardware run is pending. Until that run passes, do not claim the deployed
-phone is certified.
+**Status on 2026-11-06: EXECUTED ON THE S25 (SM-S931B, Android 16) — 20/20
+PASS.** The hardened v0.1.2 runtime was installed on the phone (per-install
+tokens and TLS under `~/.config/wtm/`, bind on the phone's Wi-Fi IP) and DeX
+was started with it. The smoke suite verified the whole chain, and a real
+browser session (Chrome) completed the login flow with the certificate
+fingerprint, decoded live video (measured on-screen: 18-60 fps, 22-279 ms
+depending on scene) and injected a tap whose effect was confirmed by a canvas
+content hash change. External-peer checks confirmed `/api/status` is 401
+without a session, Host spoofing is rejected (400) and `/healthz` is
+machine-local. The hardware-certification item is no longer pending.
+
+Devices used for the run: the S25 (wireless debugging enabled) and the
+Tab S6 Lite, both on the local network. Device IPs and ADB ports are
+deliberately not published.
 
 ## What this certification does NOT cover
 

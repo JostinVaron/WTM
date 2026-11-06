@@ -148,7 +148,7 @@ login page with the value printed at install time** (`~/.config/wtm/cert-fingerp
 and only then enter one of the generated tokens. A mismatch means the connection may be
 intercepted: do not enter tokens. The admin token unlocks the control panel
 (`https://<phone-ip>:8443/panel`); the viewer token allows watching and input but not
-start/stop actions. Local health checks use the unauthenticated loopback-only
+start/stop actions. Local health checks use the unauthenticated machine-local
 `https://127.0.0.1:8443/healthz`.
 
 When the phone changes network/IP, run `bash update-network.sh` in `$HOME/dex` to

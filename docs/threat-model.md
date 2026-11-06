@@ -39,7 +39,7 @@ deployed prototype (pre-hardening) is documented separately in
 | Login brute force | 6 failed attempts per peer per 5 minutes | `api_auth_handler` | `test_login_throttled_after_failures` |
 | Cross-site WebSocket/CSRF | Same-site Origin required for all POST/WS; Host allowlist | `security_middleware` | security + live suites |
 | Unauthorized control | `/api/control` admin-only, fixed actions (`start_dex`, `stop_dex`), no shell construction | `api_control_handler` | viewer-403 and action-limit tests |
-| Information leak via health endpoint | `/healthz` loopback-only, unauthenticated, two booleans + fingerprint | `health_handler` | security + live suites |
+| Information leak via health endpoint | `/healthz` machine-local only, unauthenticated, limited to `ok`, `scrcpy_alive` and the public certificate fingerprint. Machine-local means loopback **or** a peer whose source IP equals the listener IP (needed because the hardened listener binds the Wi-Fi IP, and the on-device scripts check health from there) | `health_handler` + `is_local_peer` | security + live suites + on-device smoke |
 | Host header/DNS-rebinding | Allowlist of Host values (loopback defaults + `WTM_ALLOWED_HOSTS`) | `security_middleware` | `test_wrong_host_rejected` |
 | Exposure on unknown networks | Default bind = detected Wi-Fi IP, not 0.0.0.0; `update-network.sh` refreshes it | `install.sh`, `update-network.sh` | shell checks in CI |
 | Log injection | `/log` strips C0 control characters | `log_handler` | code review (security report) |
@@ -57,6 +57,12 @@ deployed prototype (pre-hardening) is documented separately in
 - **LAN attacker between fingerprint check and use.** The fingerprint flow
   detects a substituted certificate only if the user compares. Automated
   pinning in the client is a possible future improvement.
+- **Health endpoint accepts peers whose source IP equals the listener IP.**
+  `/healthz` is machine-local but the hardened listener binds the Wi-Fi IP, so
+  on-device scripts connect from that address. A peer that can spoof that
+  source IP could read `ok`, `scrcpy_alive` and the (public) certificate
+  fingerprint without completing a TCP handshake bidirectionally; nothing
+  actionable is exposed. Keep the port closed to untrusted networks.
 - **Wireless debugging (adbd) surface.** Required for the pipeline. Android's
   pairing protects silent takeover, but an attacker can trigger an on-screen
   authorization prompt; a single accidental "Allow" grants a full ADB shell.

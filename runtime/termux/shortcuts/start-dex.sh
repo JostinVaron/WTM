@@ -8,7 +8,7 @@ export PREFIX=/data/data/com.termux/files/usr
 DEX_DIR="$HOME/dex"
 LOG="$PREFIX/tmp/rd-start.log"
 PORT="${PORT:-8443}"
-HEALTH_URL="https://127.0.0.1:$PORT/healthz"
+HEALTH_URL="https://${WTM_BIND_HOST:-127.0.0.1}:$PORT/healthz"
 mkdir -p "$PREFIX/tmp"
 exec >>"$LOG" 2>&1
 log(){ printf '[start-dex] %s %s\n' "$(date '+%F %T')" "$*"; }
