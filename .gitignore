@@ -1,0 +1,30 @@
+# Secrets, generated credentials, and device-specific material
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+adbkey
+adbkey.pub
+
+# Device logs, local test output, and generated artifacts
+*.log
+*.trace
+*.pcap
+*.mp4
+*.webm
+*.png
+*.jpg
+*.jpeg
+*.zip
+*.jar
+*.apk
+*.aab
+*.dex
+*.class
+*.o
+*.so
+__pycache__/
+.DS_Store
