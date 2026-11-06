@@ -70,6 +70,7 @@ is not used for video.
 - [Current Termux deployment and reproduction guide](docs/deployment-termux.md)
 - [Runtime release candidate](docs/runtime-release-candidate.md)
 - [Certification and tests](docs/certification.md)
+- [Releases and packages](docs/releases.md)
 - [Security and privacy](SECURITY.md)
 - [Licensing](LICENSING.md)
 - [Issue, milestone, and release policy](docs/project-governance.md)
@@ -126,8 +127,10 @@ See [licensing](LICENSING.md) and third-party notices in
 - Downloadable app: **not available**; source-only Termux installer in `runtime/termux/`
 - Automated tests: 26/26 passing (host), independent security review completed
 - On-device certification: **pending** (see [certification](docs/certification.md))
+- CI: `.github/workflows/ci.yml`; releases: `.github/workflows/release.yml`
 - Public issue templates: available in `.github/ISSUE_TEMPLATE/`
-- Release artifacts: **none**
+- Release artifacts: source packages under
+  [Releases](https://github.com/JostinVaron/WTM/releases), built from `v*` tags
 
 See [Project governance](docs/project-governance.md) for what must be completed before
 creating a public release.

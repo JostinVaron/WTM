@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: python -m pip install "aiohttp==3.14.5"
+
+      - name: Run test suites before packaging
+        working-directory: runtime/termux
+        run: python -m unittest tests.test_server_security tests.test_server_live
+
+      - name: Build source package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          tar -czf "dist/wtm-runtime-${VERSION}.tar.gz" \
+              --transform "s,^,wtm-runtime-${VERSION}/," \
+              LICENSE LICENSE-docs.txt LICENSING.md README.md SECURITY.md \
+              runtime/termux/server.py \
+              runtime/termux/web \
+              runtime/termux/dex.sh \
+              runtime/termux/install.sh \
+              runtime/termux/scrcpy-phone.sh \
+              runtime/termux/start_phone.sh \
+              runtime/termux/watchdog.sh \
+              runtime/termux/update-network.sh \
+              runtime/termux/find-adb-port.py \
+              runtime/termux/shortcuts \
+              runtime/termux/boot \
+              runtime/termux/tests \
+              docs/certification.md \
+              docs/deployment-termux.md
+          cd dist
+          sha256sum "wtm-runtime-${VERSION}.tar.gz" > "wtm-runtime-${VERSION}.tar.gz.sha256"
+          cat "wtm-runtime-${VERSION}.tar.gz.sha256"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "WTM runtime $GITHUB_REF_NAME" \
+              --notes "Automated source package of the WTM Termux runtime. See docs/certification.md for test evidence and pending on-device certification." \
+              dist/*
+
+      - name: Upload artifact for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: wtm-release-package
+          path: dist/
