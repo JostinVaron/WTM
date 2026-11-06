@@ -51,6 +51,10 @@ secret-bearing proof-of-concept material publicly. Contact the repository owner 
 a verified private channel and include only the minimum information needed to reproduce
 the issue.
 
+The threat model with assets, attackers, implemented controls and residual risks is in
+[docs/threat-model.md](docs/threat-model.md). Security findings should map to a threat
+and an asset and must be reproducible without touching the owner's live devices.
+
 ## Required pre-release security work
 
 The hardened runtime in `runtime/termux/` covers the items below with

@@ -72,4 +72,13 @@ phone is certified.
 - Long-duration stability, thermal behavior, reboot recovery or Wi-Fi
   handover.
 - Any guarantee of security: passing these tests means the implemented
-  controls behave as specified, not that the system is invulnerable.
+  controls behave as specified, not that the system is invulnerable. See
+  [threat-model](threat-model.md) for the complete model, including residual
+  risks.
+
+## Independent external reviews
+
+| Date | Reviewer | Scope | Result | Notes |
+|---|---|---|---|---|
+| 2026-11-06 | Independent AI review (external) | Repository-wide | Reported missing LICENSE, source code, SECURITY.md, CONTRIBUTING.md, requirements and installer | **Stale snapshot**: the review cited the pre-runtime documentation state. All cited gaps were already resolved (LICENSE, `runtime/termux/` sources, SECURITY.md, CONTRIBUTING.md, `.gitignore`). Two legitimate items were adopted: `CODE_OF_CONDUCT.md`, `AGENTS.md` (AI-assistant protocol), `docs/threat-model.md` and `runtime/termux/requirements.txt` |
+| 2026-11-06 | Independent security review (read-only, adversarial probes) | Release-candidate runtime | No CRITICAL/HIGH; 2 MEDIUM, 3 LOW — all fixed before publication | Evidence in [runtime-release-candidate](runtime-release-candidate.md) and SECURITY.md |

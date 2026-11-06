@@ -8,13 +8,15 @@ the scrcpy Android server, relays H.264 through a Python service running nativel
 Termux, and renders it in Chrome on the tablet using WebCodecs. Pointer and keyboard
 events travel in the reverse direction.
 
-> **Project status: experimental, device-specific prototype.** This repository is a
-> technical handoff and reproducibility specification, not a released Android app.
-> There is no signed installer, supported device matrix, formal product security review,
-> release build, or verified 60 FPS guarantee. The production path requires Termux and
-> Wireless ADB.
-> The Termux deployment tree and the separate local work copy differ; this handoff does
-> not claim to be a source-code snapshot of either one.
+> **Project status: experimental, device-specific prototype with a published,
+> tested runtime.** The repository includes the hardened Termux runtime under
+> [runtime/termux/](runtime/termux/) with an installer, automated tests and a
+> completed independent security review; there is **no** signed Android app,
+> supported device matrix, or verified 60 FPS guarantee. The on-device
+> certification on the S25 is still pending. The production path requires
+> Termux and Wireless ADB.
+> The prototype currently deployed on the owner's phone predates the hardening
+> published here and is not identical to it; see [SECURITY.md](SECURITY.md).
 
 ## What is currently demonstrated
 
@@ -70,9 +72,12 @@ is not used for video.
 - [Current Termux deployment and reproduction guide](docs/deployment-termux.md)
 - [Runtime release candidate](docs/runtime-release-candidate.md)
 - [Certification and tests](docs/certification.md)
+- [Threat model](docs/threat-model.md)
 - [Releases and packages](docs/releases.md)
 - [Security and privacy](SECURITY.md)
 - [Licensing](LICENSING.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
+- [Instructions for AI assistants](AGENTS.md)
 - [Issue, milestone, and release policy](docs/project-governance.md)
 - [GitHub publication/authentication](docs/publishing.md)
 - [Contribution guide](CONTRIBUTING.md)

@@ -19,7 +19,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependencies
-        run: python -m pip install "aiohttp==3.14.5"
+        run: python -m pip install -r runtime/termux/requirements.txt
 
       - name: Run test suites before packaging
         working-directory: runtime/termux
@@ -32,6 +32,7 @@ jobs:
           tar -czf "dist/wtm-runtime-${VERSION}.tar.gz" \
               --transform "s,^,wtm-runtime-${VERSION}/," \
               LICENSE LICENSE-docs.txt LICENSING.md README.md SECURITY.md \
+              AGENTS.md CODE_OF_CONDUCT.md CONTRIBUTING.md \
               runtime/termux/server.py \
               runtime/termux/web \
               runtime/termux/dex.sh \
@@ -42,11 +43,13 @@ jobs:
               runtime/termux/update-network.sh \
               runtime/termux/find-adb-port.py \
               runtime/termux/VERSION \
+              runtime/termux/requirements.txt \
               runtime/termux/shortcuts \
               runtime/termux/boot \
               runtime/termux/tests \
               docs/certification.md \
-              docs/deployment-termux.md
+              docs/deployment-termux.md \
+              docs/threat-model.md
           cd dist
           sha256sum "wtm-runtime-${VERSION}.tar.gz" > "wtm-runtime-${VERSION}.tar.gz.sha256"
           cat "wtm-runtime-${VERSION}.tar.gz.sha256"

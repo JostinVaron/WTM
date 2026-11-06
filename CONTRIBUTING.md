@@ -34,6 +34,7 @@ The runtime tests run on any host with Python 3.10+ and aiohttp:
 
 ```sh
 cd runtime/termux
+python3 -m pip install -r requirements.txt
 python3 -m unittest tests.test_server_security tests.test_server_live
 ```
 
@@ -45,4 +46,14 @@ cd ~/dex
 bash tests/device-smoke.sh
 ```
 
-See [certification](docs/certification.md) for what each suite covers.
+See [certification](docs/certification.md) for what each suite covers and
+[AGENTS.md](../AGENTS.md) for the rules AI assistants must follow.
+
+## AI-assisted contributions
+
+AI-generated analyses and patches are welcome if they follow
+[AGENTS.md](../AGENTS.md): cite file/line evidence against the current tree,
+state which checks were actually executed, and record dated review entries in
+[docs/certification.md](docs/certification.md) when publishing an independent
+review. Reviews based on stale snapshots or without verification will be
+corrected or rejected.
