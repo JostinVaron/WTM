@@ -61,10 +61,14 @@ All browsers holding the old cookie must log in again with the new token.
 
 ## Reporting a vulnerability
 
-Until a private reporting address is configured by the repository owner, do not post
-secret-bearing proof-of-concept material publicly. Contact the repository owner through
-a verified private channel and include only the minimum information needed to reproduce
-the issue.
+Private vulnerability reporting is enabled. Report vulnerabilities confidentially
+through GitHub:
+
+- <https://github.com/JostinVaron/WTM/security/advisories/new>
+
+Include only the minimum information needed to reproduce the issue and never post
+secret-bearing proof-of-concept material publicly. Prefer the advisory flow over
+public issues for anything security-related.
 
 The threat model with assets, attackers, implemented controls and residual risks is in
 [docs/threat-model.md](docs/threat-model.md). Security findings should map to a threat
