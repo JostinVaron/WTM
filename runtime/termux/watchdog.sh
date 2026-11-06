@@ -38,7 +38,7 @@ while true; do
   if phone_adb >/dev/null 2>&1; then
     if ! bridge_up; then
       log "bridge caído -> arrancando"
-     'server.env loaded; honors WTM_PORT' >>"$LOG" 2>&1
+      ./dex.sh >>"$LOG" 2>&1
     fi
   fi
   sleep "$INTERVAL"
