@@ -1,0 +1,64 @@
+name: AI review report
+description: Submit an AI-assisted repository review (findings must follow AGENTS.md)
+title: "[AI review] <scope> - <date>"
+labels: ["ai-review", "documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form to submit an independent review produced by an AI
+        assistant. Follow [AGENTS.md](../../blob/main/AGENTS.md): verify
+        against the current tree, cite file paths and line numbers, and state
+        exactly which checks you executed. Reviews based on stale snapshots or
+        unverified claims will be corrected or closed.
+  - type: input
+    id: reviewer
+    attributes:
+      label: Reviewing model and date
+      description: "Model/assistant name and date of the review (e.g. Copilot, 2026-11-06)."
+      placeholder: "Model, YYYY-MM-DD"
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or tag reviewed
+      description: The exact commit SHA or tag the review was performed against.
+      placeholder: "b99f256 or v0.1.1"
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and method
+      description: What was analyzed and which commands/tests were actually executed.
+    validations:
+      required: true
+  - type: textarea
+    id: findings
+    attributes:
+      label: Findings
+      description: |
+        Numbered findings with severity (CRITICAL/HIGH/MEDIUM/LOW), file paths,
+        line numbers, and confidence. Map security findings to the threat model
+        (docs/threat-model.md).
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Verification evidence
+      description: Logs, test output, or reproduction steps that back each finding.
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmation
+      options:
+        - label: I verified findings against the current tree at the commit/tag above.
+          required: true
+        - label: I did not access or test the owner's live devices or network.
+          required: true
+        - label: I included no secrets, tokens, private keys, or unredacted logs.
+          required: true
