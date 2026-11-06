@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a reproducible failure in the WTM prototype
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include passwords, ADB pairing data, private keys, personal IPs, serial numbers, or unredacted logs."
+  - type: input
+    id: source
+    attributes:
+      label: Source device and Android version
+      placeholder: "e.g. Galaxy S25, Android 16 / API 36"
+    validations:
+      required: true
+  - type: input
+    id: viewer
+    attributes:
+      label: Viewer device, Android version, and browser
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: WTM revision and dependency versions
+      description: Include Termux, Python/aiohttp, ADB, scrcpy-server, and Chrome versions where relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Give exact steps and whether the problem repeats.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: metrics
+    attributes:
+      label: Measurements
+      description: Resolution, configured FPS, source/input/decoded FPS, latency, drops, workload, test duration, Wi-Fi conditions, and thermal state.
+    validations:
+      required: false
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy and safety check
+      options:
+        - label: I removed credentials, pairing information, personal IPs, serials, and private data from this report.
+          required: true
