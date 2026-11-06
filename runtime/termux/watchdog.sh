@@ -5,7 +5,13 @@ export HOME=/data/data/com.termux/files/home
 export PREFIX=/data/data/com.termux/files/usr
 cd "$(dirname "$0")"
 ADB=/data/data/com.termux/files/usr/bin/adb
-PORT=8443
+CONFIG="$HOME/.config/wtm/server.env"
+if [ -r "$CONFIG" ]; then
+    set -a
+    . "$CONFIG"
+    set +a
+fi
+PORT="${PORT:-8443}"
 INTERVAL="${INTERVAL:-10}"
 LOG=$PREFIX/tmp/rd-watchdog.log
 log(){ echo "[watchdog] $(date +%H:%M:%S) $*" >>"$LOG"; }
@@ -32,7 +38,7 @@ while true; do
   if phone_adb >/dev/null 2>&1; then
     if ! bridge_up; then
       log "bridge caído -> arrancando"
-      ./dex.sh >>"$LOG" 2>&1
+     'server.env loaded; honors WTM_PORT' >>"$LOG" 2>&1
     fi
   fi
   sleep "$INTERVAL"
