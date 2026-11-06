@@ -93,13 +93,15 @@ is not used for video.
    that the debugging service remains enabled.
 3. **60 FPS is a cap, not an end-to-end guarantee.** The phone can produce near-60 FPS
    under some scenes while Chrome drops far below that rate under complex motion.
-4. **The deployed prototype has no security boundary.** The prototype currently
+4. **The deployed prototype predates the published hardening.** The prototype currently
    deployed on the S25 uses a self-signed certificate and an unauthenticated control
    endpoint capable of starting/stopping Termux scripts. Do not expose it to untrusted
-   networks; see [Security](SECURITY.md). A hardened release candidate exists on branch
-   `executable-release-candidate` (cookie auth, Origin/Host checks, TLS fail-closed,
-   admin-only control) but is not published, not deployed and not independently
-   reviewed; see [runtime release candidate](docs/runtime-release-candidate.md).
+   networks; see [Security](SECURITY.md). The hardened runtime published in
+   [runtime/termux/](runtime/termux/) (cookie auth, Origin/Host checks, TLS fail-closed,
+   admin-only control) was independently reviewed before publication and is released as
+   v0.1.1, but it is not the tree currently running on the phone, and the on-device
+   certification is still pending; see
+   [runtime release candidate](docs/runtime-release-candidate.md).
 5. **The runtime is published but not hardware-certified.** `main` includes the
    relay source, browser clients, launcher/watchdog scripts, an idempotent Termux
    installer that downloads the official scrcpy server with a pinned checksum, and
@@ -124,7 +126,8 @@ See [licensing](LICENSING.md) and third-party notices in
 ## Repository status
 
 - Public repository: [JostinVaron/WTM](https://github.com/JostinVaron/WTM)
-- Version: **unreleased prototype / runtime published as source**
+- Version: **v0.1.1** — published runtime, source-only (see
+  [Releases](https://github.com/JostinVaron/WTM/releases))
 - License: software [PolyForm Noncommercial 1.0.0](LICENSE), documentation
   [CC BY-NC 4.0](LICENSE-docs.txt) — see [Licensing](LICENSING.md)
 - Supported installations: **none formally**
