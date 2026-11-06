@@ -10,8 +10,9 @@ events travel in the reverse direction.
 
 > **Project status: experimental, device-specific prototype.** This repository is a
 > technical handoff and reproducibility specification, not a released Android app.
-> There is no signed installer, supported device matrix, security review, release build,
-> or verified 60 FPS guarantee. The production path requires Termux and Wireless ADB.
+> There is no signed installer, supported device matrix, formal product security review,
+> release build, or verified 60 FPS guarantee. The production path requires Termux and
+> Wireless ADB.
 > The Termux deployment tree and the separate local work copy differ; this handoff does
 > not claim to be a source-code snapshot of either one.
 
@@ -21,7 +22,7 @@ events travel in the reverse direction.
   S6 Lite Wi-Fi (`SM-P613`, Android 14 / API 34).
 - The phone's scrcpy virtual display is configured as 2000 x 1200 at 60 Hz. The
   encoder is configured for H.264, a 12 Mbps target and a maximum of 60 FPS.
-- Short, relatively simple motion tests reached about 58-60 decoded FPS in Chrome, with
+- Short, relatively simple motion tests reached about 57.6-60 decoded FPS in Chrome, with
   measured mean capture-to-decoder latency around 23-26 ms and no client drops in some
   five-second windows.
 - Detailed motion and app changes caused major regressions: the tablet fell to 13-14
@@ -89,8 +90,11 @@ is not used for video.
    starting/stopping Termux scripts. Do not expose the current service to untrusted
    networks; see [Security](SECURITY.md).
 5. **This repository does not yet include a redistributable app or runtime bundle.**
-   Upstream/bundled binaries, signing material, private TLS keys, and raw device logs are
-   deliberately excluded.
+   The relay source and browser client (`server.py`, `index.html`, `panel.html`), launcher
+   and watchdog scripts, scrcpy server artifact, signing material, private TLS keys, and
+   raw device logs are deliberately excluded. The deployment guide is not a
+   clone-and-run installation procedure; it describes a runtime already installed
+   separately on the test phone.
 
 ## Hardware requirements: what we can and cannot claim
 
@@ -104,6 +108,7 @@ build artifacts as an official WTM release. See [license status](NO-LICENSE.md).
 
 ## Repository status
 
+- Public repository: [JostinVaron/WTM](https://github.com/JostinVaron/WTM)
 - Version: **unreleased prototype / documentation baseline**
 - Supported installations: **none formally**
 - Latest tested configuration: **S25 + Tab S6 Lite, 2000 x 1200 / configured 60 FPS**

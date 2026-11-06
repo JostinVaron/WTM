@@ -4,6 +4,22 @@ This procedure describes the existing prototype, not a one-click installer or a
 Termux-independent product. It assumes the project has been installed manually in
 `$HOME/dex` on the source phone.
 
+## Important: this repository cannot deploy the service by itself
+
+The public repository is a documentation-only handoff. The following runtime files are
+not included, so cloning this repository does not create a runnable WTM installation:
+
+- `$HOME/.shortcuts/start-dex.sh` and `$HOME/.shortcuts/stop-dex.sh`;
+- `$HOME/.termux/boot/01-dex.sh`;
+- `$HOME/dex/dex.sh`, `scrcpy-phone.sh`, `server.py`, `index.html`, `panel.html`,
+  `route-input.sh`, `watchdog.sh` and `find-adb-port.py`;
+- the scrcpy server artifact and per-install TLS certificate/key.
+
+These are described as components of the separately installed test setup. No verified
+installer, clean-device setup procedure, or safe redistribution bundle is available.
+Do not treat example paths or commands below as proof that the omitted files can be
+obtained from this repository.
+
 ## Prerequisites
 
 1. The source phone and tablet are on a trusted local network.

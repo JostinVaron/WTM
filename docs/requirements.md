@@ -42,6 +42,13 @@ The project has only been exercised on the baseline pair above. Therefore:
 Do not advertise these estimates as guaranteed compatibility. A future release needs a
 published device matrix with pass/fail results.
 
+## Latency goal and measurement scope
+
+The project has previously stated an aspirational goal of about 20 ms average
+capture-to-decoder latency. This is not a validated requirement or release gate. The
+available browser metric does not include physical display scanout and must not be
+presented as photon-to-photon latency. See [performance evidence](performance.md).
+
 ## Operating system and app requirements
 
 ### Source phone

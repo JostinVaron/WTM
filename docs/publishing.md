@@ -1,68 +1,48 @@
-# GitHub publication and secure owner authentication
+# GitHub publication and release status
 
-## Proposed repository
+## Public repository
 
-- Repository name: `wireless-tactile-monitor`
-- Description: `Technical documentation and measured prototype status for a touch-enabled Android virtual display stream.`
-- Visibility: public, because the stated goal is for other developers to learn and reproduce the research.
-- Initial content: documentation, requirements, issue templates, governance and security policy only.
-- No APK, no runtime source snapshot, no scrcpy/R8/Android JARs, no logs, no certificates,
-  no private keys, and no ADB authorization material.
+The documentation repository is published at
+[JostinVaron/WTM](https://github.com/JostinVaron/WTM) and is public. Its `main` branch
+contains the project overview, architecture and deployment notes, dependency inventory,
+hardware requirements, measured performance, security policy, contribution/governance
+guidance and GitHub issue templates.
 
-The runtime is not ready to publish: it has an unauthenticated control API and the source
-project has no selected license or complete third-party notice. Do not disable the
-repository security guard or add runtime files just to enable a release.
+This is a documentation handoff, not a source-code or app release. The repository does
+not include the active Termux runtime, an APK, third-party server binaries, logs,
+certificates, private keys or ADB authorization material. The device-specific prototype
+must not be treated as a reproducible installation until the runtime source, dependency
+provenance and installation process are reviewed and published safely.
 
-## Why GitHub credentials are needed
+The project has no selected license; see [No license](../NO-LICENSE.md). Public
+availability does not grant permission to redistribute or reuse the material.
 
-The GitHub MCP tools available in this environment provide read/search operations only.
-The integrated browser is signed out, and the GitHub CLI is not installed or
-authenticated. An email address is not sufficient to identify a GitHub username or
-authorize repository creation.
+## Security and privacy gate for future changes
 
-Never send a GitHub password, personal access token, recovery code, SSH private key or
-ADB key in this chat. The account owner should authenticate through GitHub's official
-OAuth/device flow. On a machine where the owner is comfortable storing GitHub CLI
-credentials:
+Before adding files to this public repository:
 
-```sh
-gh auth login --hostname github.com --git-protocol https --web
-gh auth status
-gh api user --jq .login
-```
+- inspect the full diff and all files for passwords, tokens, private keys, certificates,
+  pairing data, serial numbers, personal network addresses, raw logs and private paths;
+- inspect the commit history as well as the current tree; deleting a secret in a later
+  commit does not remove it from history;
+- publish only information the owner intends to make public, and use placeholders for
+  per-install network values;
+- keep runtime code unpublished until its unauthenticated WebSocket/control/log
+  interfaces and TLS behavior are redesigned and independently reviewed;
+- establish source provenance, third-party notices and a project license before
+  redistributing implementation code or binaries.
 
-The owner completes the browser/device authorization directly on GitHub. Do not paste
-the password or access token into a terminal command, repository file, issue, or chat.
-Review where the GitHub CLI stores credentials on that host; use its OS credential
-store/keyring when available and protect any local fallback configuration.
+Never put GitHub passwords, personal access tokens, SSH private keys, ADB keys or
+pairing secrets in this repository, an issue, a commit message or this chat. Authenticate
+through GitHub's official interface and use a protected credential store on any machine
+used for Git operations.
 
-After confirming the authenticated login is the intended account, initialize and push
-the prepared documentation tree:
+## Issues and releases
 
-```sh
-cd WTM-Project
-git init -b main
-git add .
-git diff --cached --check
-git commit -m "docs: establish WTM technical handoff"
-gh repo create wireless-tactile-monitor \
-  --public \
-  --description "Technical documentation and measured prototype status for a touch-enabled Android virtual display stream." \
-  --source=. \
-  --remote=origin \
-  --push
-```
+The repository includes issue forms, but no issues should be fabricated. Recommended
+follow-up issues include:
 
-The command above should only be run after `gh api user --jq .login` confirms the owner
-account. If the repository name already exists under that owner, inspect it before
-choosing a different name; do not overwrite or force-push an existing project.
-
-## Initial issues and releases
-
-The repository includes issue forms, but no issues should be fabricated. Create initial
-issues after publication for:
-
-1. secure/authenticated control plane;
+1. secure/authenticated control plane and WebSocket pairing;
 2. Termux-independent service feasibility and Android permission model;
 3. reproducible install/dependency manifest;
 4. sustained high-motion decoder/performance investigation;
@@ -70,6 +50,6 @@ issues after publication for:
 6. lifecycle/reconnect tests after reboot, force-stop and Wi-Fi changes;
 7. project license and third-party notice review.
 
-There should be no GitHub Release until the gate in
-[project governance](project-governance.md) is satisfied. A documentation snapshot is
-not a downloadable software release.
+There is no GitHub Release. Do not create one until the gates in
+[project governance](project-governance.md) are met. The public documentation snapshot
+is not a downloadable software release.

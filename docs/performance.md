@@ -43,8 +43,10 @@ recommendation to operate at those temperatures.
 3. **The 12 Mbps encoder setting is not sufficient evidence for quality or required
    network throughput.** An observed client telemetry spike reached 62-70 Mbps during a
    difficult-motion test; its instantaneous nature and instrumentation need validation.
-4. **The 20 ms target is not met reliably.** Some short windows averaged 23-26 ms, app
-   transitions averaged 33-45 ms, and complex scenes reached seconds of decode backlog.
+4. **The previously stated ~20 ms average capture-to-decoder goal is not met reliably.**
+   Some short windows averaged 23-26 ms, app transitions averaged 33-45 ms, and complex
+   scenes reached seconds of decode backlog. This is an aspirational software-metric
+   goal, not a photon-to-photon measurement or a release gate.
 5. **No OLED-like color/depth claim is supported.** The stream uses H.264 4:2:0 and the
    virtual display advertises SDR. Colorimetry, HDR pass-through, panel calibration,
    transfer function and end-to-end bit depth have not been comprehensively measured.
