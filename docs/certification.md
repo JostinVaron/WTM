@@ -82,3 +82,11 @@ phone is certified.
 |---|---|---|---|---|
 | 2026-11-06 | Independent AI review (external) | Repository-wide | Reported missing LICENSE, source code, SECURITY.md, CONTRIBUTING.md, requirements and installer | **Stale snapshot**: the review cited the pre-runtime documentation state. All cited gaps were already resolved (LICENSE, `runtime/termux/` sources, SECURITY.md, CONTRIBUTING.md, `.gitignore`). Two legitimate items were adopted: `CODE_OF_CONDUCT.md`, `AGENTS.md` (AI-assistant protocol), `docs/threat-model.md` and `runtime/termux/requirements.txt` |
 | 2026-11-06 | Independent security review (read-only, adversarial probes) | Release-candidate runtime | No CRITICAL/HIGH; 2 MEDIUM, 3 LOW — all fixed before publication | Evidence in [runtime-release-candidate](runtime-release-candidate.md) and SECURITY.md |
+| 2026-11-06 | Independent AI re-audit (external, v2) — commit `69d53c3` | Repository-wide post-governance | 16 findings: verified all governance changes present; flagged stale README status text, CI secret sweep failing open when `rg` is missing, hardcoded watchdog port, divergent server default port (8090 vs 8443), absent private vulnerability channel, unbounded login-throttle peer table | Fixes landed on branch `fix/runtime-consistency`: README status sync, `watchdog.sh` loads `server.env`, `SECURITY.md` token-rotation procedure and corrected throttle description, this review record. CI sweep fix blocked by missing `workflow` OAuth scope in this session; the one-line `server.py` port default remains proposed in the PR description |
+
+## Certification criteria status
+
+The acceptance gates proposed in [performance](performance.md) (resolution, 57 FPS
+over 30-minute windows, drop rate, latency percentiles, Wi-Fi conditions, thermal
+reporting, reconnect) have **not** been executed. No long-duration soak test exists
+yet. Until one passes, no release may claim "2K60".
