@@ -44,6 +44,21 @@ Use fresh credentials for each development or user installation. Do not commit a
 secret and then assume that deleting it in a later commit makes it safe; rotate the
 exposed credential.
 
+## Token rotation procedure (hardened runtime)
+
+Tokens are static per-install shared secrets. There is no in-process revocation;
+rotation regenerates the credential set. To rotate on the phone, in Termux:
+
+```sh
+rm -f ~/.config/wtm/auth-tokens.json
+bash ~/dex/install.sh   # regenerates tokens and prints the new ones
+bash ~/dex/tests/device-smoke.sh   # re-verify the install before use
+```
+
+`install.sh` preserves existing TLS material and configuration, so rotation does
+not require new certificate-fingerprint comparison; only the login tokens change.
+All browsers holding the old cookie must log in again with the new token.
+
 ## Reporting a vulnerability
 
 Until a private reporting address is configured by the repository owner, do not post
@@ -72,8 +87,10 @@ implemented controls and passing tests; they are not a guarantee:
 - test behavior when Wi-Fi changes, peers disconnect, and permissions are revoked.
 
 Remaining known gaps in the published runtime: tokens are static shared secrets
-with client-side logout only (rotate by reinstalling/regenerating), the
-certificate is self-signed (trust rests on the fingerprint comparison), and
+with client-side logout only (rotate with the procedure above), the
+certificate is self-signed (trust rests on the fingerprint comparison), the
+login throttle is per peer IP with a 5-minute window (expired entries are
+pruned on each sign-in attempt), and
 the deployment on the real S25 has not been exercised with the on-device
 certification script. Track these in issues before any production claim.
 
