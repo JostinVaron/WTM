@@ -4,6 +4,11 @@ This procedure describes the existing prototype, not a one-click installer or a
 Termux-independent product. It assumes the project has been installed manually in
 `$HOME/dex` on the source phone.
 
+A release-candidate installer and hardened runtime exist on branch
+`executable-release-candidate`; they are **not published and not deployed**. See
+[runtime release candidate](runtime-release-candidate.md) for what changed and what
+still blocks publication.
+
 ## Important: this repository cannot deploy the service by itself
 
 The public repository is a documentation-only handoff. The following runtime files are
@@ -121,3 +126,29 @@ client/source metrics.
 
 Do not claim restart-proof behavior unless each case is exercised and measured on the
 published support matrix.
+
+## Release-candidate installer (unpublished)
+
+On the `executable-release-candidate` branch, `runtime/termux/install.sh` is an
+idempotent Termux installer that:
+
+1. verifies it runs in Termux on the source phone and detects the LAN IP for the
+   allowed host list (override with `WTM_ALLOWED_HOSTS`);
+2. installs missing Termux packages (`python`, `aiohttp`, `openssl`, `curl`);
+3. copies the package sources into `$HOME/dex`;
+4. downloads the official scrcpy server v5.0.1 and verifies SHA-256
+   `764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536`;
+5. generates per-install viewer/admin tokens, a TLS certificate/key, and a
+   `server.env` under `~/.config/wtm/` (never overwriting existing credentials);
+6. installs Termux:Widget shortcuts and the Termux:Boot hook.
+
+After installation the bridge requires a browser login: open
+`https://<phone-ip>:8443/`, accept the per-install certificate in Chrome, and enter one
+of the generated tokens. The admin token unlocks the control panel
+(`https://<phone-ip>:8443/panel`); the viewer token allows watching and input but not
+start/stop actions. Local health checks use the unauthenticated loopback-only
+`https://127.0.0.1:8443/healthz`.
+
+This flow has not been exercised on the real device pair yet. Until the license and
+review gates in [runtime-release-candidate](runtime-release-candidate.md) are met, do
+not publish or promote it as a supported installation path.

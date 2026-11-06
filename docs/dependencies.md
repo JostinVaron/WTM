@@ -68,11 +68,15 @@ before declaring a clean installer.
 
 ## Dependency and artifact hygiene
 
-- The 5.0.1 server JAR is a third-party component; its upstream source, exact build,
-  integrity hash, license and redistribution terms must be recorded before bundling it.
-- The current project has PEM TLS material. A private key must never be published. A
-  future setup should generate a per-install certificate or establish a trusted pairing
-  flow instead of sharing one private key.
+- The 5.0.1 server JAR is a third-party component published by Genymobile under
+  Apache-2.0. Its release asset SHA-256 was verified on 2026-11-06 as
+  `764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536`, matching the
+  artifact already deployed on the prototype. The release-candidate installer
+  downloads that official asset and pins this checksum instead of redistributing the
+  JAR.
+- The current project has PEM TLS material. A private key must never be published. The
+  release-candidate installer generates a per-install certificate/key under
+  `~/.config/wtm/` on the phone instead of sharing one private key.
 - No complete dependency lockfile or reproducible installation manifest is currently
   established.
 - There is no signed Android APK/AAB or official WTM release package.

@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeX Tahoe</title>
+<style>
+  :root {
+    --bg: #f5f5f7; --card: #ffffff; --text: #1d1d1f; --text2: #6e6e73;
+    --line: rgba(0,0,0,0.08); --accent: #007aff; --green: #34c759; --red: #ff3b30; --orange: #ff9500;
+    --radius: 16px; --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.05);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    min-height: 100vh; padding: 28px 20px 40px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+  .logo { width: 40px; height: 40px; border-radius: 11px; background: linear-gradient(140deg,#0a84ff,#5e5ce6);
+    display: grid; place-items: center; color: #fff; font-weight: 700; box-shadow: 0 4px 14px rgba(10,132,255,.3); }
+  header h1 { font-size: 22px; font-weight: 650; letter-spacing: -0.4px; }
+  header .sub { color: var(--text2); font-size: 13px; margin-top: 1px; }
+  .pill { margin-left: auto; display: flex; align-items: center; gap: 8px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 999px; padding: 8px 15px; font-size: 13.5px; font-weight: 600;
+    box-shadow: var(--shadow); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text2); }
+  .dot.ok { background: var(--green); box-shadow: 0 0 10px var(--green); }
+  .dot.err { background: var(--red); }
+
+  section { margin-bottom: 26px; }
+  .sec-title { font-size: 15px; font-weight: 650; margin-bottom: 12px; color: var(--text); }
+
+  /* hero */
+  .hero { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 24px; box-shadow: var(--shadow); }
+  .hero h2 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
+  .hero p { color: var(--text2); margin-top: 6px; font-size: 14px; line-height: 1.5; }
+  .steps { margin-top: 18px; display: flex; flex-direction: column; gap: 10px; }
+  .step { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border-radius: 12px;
+    background: #fafafa; border: 1px solid var(--line); }
+  .step .ico { width: 22px; height: 22px; border-radius: 50%; flex: none; display: grid; place-items: center;
+    font-size: 12px; font-weight: 700; background: #e8e8ed; color: var(--text2); }
+  .step.done .ico { background: var(--green); color: #fff; }
+  .step.cur .ico { background: var(--accent); color: #fff; box-shadow: 0 0 0 4px rgba(0,122,255,.15); }
+  .step b { font-weight: 600; font-size: 14px; }
+  .step small { display: block; color: var(--text2); font-size: 12.5px; margin-top: 2px; line-height: 1.4; }
+
+  /* métricas */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .metric { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 15px 16px; box-shadow: var(--shadow); }
+  .metric .k { font-size: 11.5px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.8px; }
+  .metric .v { font-size: 26px; font-weight: 700; letter-spacing: -0.7px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .metric .v small { font-size: 13px; font-weight: 500; color: var(--text2); }
+  .metric .bar { height: 5px; background: #e8e8ed; border-radius: 3px; margin-top: 8px; overflow: hidden; }
+  .metric .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width .4s; }
+  .g { color: var(--green); } .r { color: var(--red); } .o { color: var(--orange); }
+
+  /* controles */
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button { font: inherit; font-weight: 600; font-size: 14px; border: none; border-radius: 12px;
+    padding: 11px 20px; cursor: pointer; transition: transform .06s, opacity .2s, background .2s; }
+  button:active { transform: scale(.97); }
+  .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 4px 14px rgba(0,122,255,.3); }
+  .btn-danger { background: var(--red); color: #fff; }
+  .btn-ghost { background: var(--card); border: 1px solid var(--line); color: var(--text); }
+  button:disabled { opacity: .5; cursor: default; }
+  #ctrlStatus { font-size: 14px; font-weight: 600; color: var(--text2); }
+
+  /* logs */
+  details { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); overflow: hidden; }
+  summary { padding: 14px 18px; font-weight: 650; font-size: 14px; cursor: pointer; list-style: none; }
+  summary::after { content: "▾"; float: right; color: var(--text2); }
+  details[open] summary::after { content: "▴"; }
+  .logs { padding: 0 18px 14px; max-height: 260px; overflow-y: auto;
+    font-family: "SF Mono", "JetBrains Mono", ui-monospace, monospace; font-size: 11.5px; line-height: 1.55;
+    color: #3a3a3c; white-space: pre-wrap; word-break: break-word; }
+  .logs .err { color: var(--red); } .logs .warn { color: var(--orange); } .logs .info { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">◈</div>
+    <div>
+      <h1>DeX Tahoe</h1>
+      <div class="sub">Galaxy S25 → Tab S6 Lite</div>
+    </div>
+    <div class="pill" id="pill"><span class="dot" id="dot"></span><span id="pillText">…</span></div>
+    <button class="btn-ghost" id="btnLogout" type="button">Cerrar sesión</button>
+  </header>
+
+  <section id="controlsSection">
+    <div class="hero">
+      <h2 id="heroTitle">Comprobando estado…</h2>
+      <p id="heroDesc">Detectando el estado del servicio DeX.</p>
+      <div class="steps" id="steps"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-title">Rendimiento</div>
+    <div class="grid">
+      <div class="metric"><div class="k">FPS</div><div class="v" id="mFps">—</div></div>
+      <div class="metric"><div class="k">Latencia total</div><div class="v" id="mLat">—<small>ms</small></div></div>
+      <div class="metric"><div class="k">Red</div><div class="v" id="mNet">—<small>ms</small></div></div>
+      <div class="metric"><div class="k">Dropped</div><div class="v" id="mDrop">—</div></div>
+      <div class="metric"><div class="k">Resolución</div><div class="v" id="mRes" style="font-size:19px">—</div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-title">Sistema (S25)</div>
+    <div class="grid">
+      <div class="metric"><div class="k">RAM</div><div class="v" id="mRam">—</div><div class="bar"><i id="mRamBar" style="width:0%"></i></div></div>
+      <div class="metric"><div class="k">CPU (carga)</div><div class="v" id="mLoad">—</div></div>
+      <div class="metric"><div class="k">Temperatura</div><div class="v" id="mTemp">—</div></div>
+      <div class="metric"><div class="k">Batería</div><div class="v" id="mBat">—</div></div>
+      <div class="metric"><div class="k">Señal WiFi</div><div class="v" id="mSig">—</div></div>
+      <div class="metric"><div class="k">Modo</div><div class="v" id="mMode" style="font-size:19px">—</div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-title">Controles</div>
+    <div class="controls">
+      <button class="btn-primary" id="btnStart" onclick="ctrl('start_dex',this)">Iniciar DeX</button>
+      <button class="btn-danger" id="btnStop" onclick="ctrl('stop_dex',this)">Detener DeX</button>
+      <span id="ctrlStatus"></span>
+    </div>
+  </section>
+
+  <section>
+    <details>
+      <summary>Registro técnico</summary>
+      <div class="logs" id="logs">—</div>
+    </details>
+  </section>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+let last = null;
+
+function redirectToLogin() {
+  location.replace("/login?next=/panel");
+}
+
+async function status() {
+  try {
+    const r = await fetch("/api/status", { cache: "no-store" });
+    if (r.status === 401) { redirectToLogin(); return; }
+    if (!r.ok) throw new Error(`status request failed: ${r.status}`);
+    last = await r.json(); render(last);
+  } catch (e) { setPill("Sin conexión al bridge", "err"); }
+}
+async function logs() {
+  try {
+    const response = await fetch("/api/logs", { cache: "no-store" });
+    if (response.status === 401) { redirectToLogin(); return; }
+    if (!response.ok) throw new Error(`logs request failed: ${response.status}`);
+    const t = await response.text();
+    $("logs").innerHTML = t.split("\n").map(l => {
+      const c = /error|failed|exception|FATAL/i.test(l) ? "err" : /warn|caído|reiniciando|aviso/i.test(l) ? "warn" : /connected|config|decoder|fps|IDR/i.test(l) ? "info" : "";
+      return `<span class="${c}">${esc(l)}</span>`;
+    }).join("\n");
+  } catch (e) {}
+}
+
+function setPill(t, cls) { $("pillText").textContent = t; $("dot").className = "dot " + (cls||""); }
+
+function render(d) {
+  const alive = d.scrcpy_alive, stopped = d.dex_stopped, clients = d.clients;
+  const c = d.client, dev = d.device || {}, cfg = d.config || {};
+
+  // estado global
+  if (stopped) { setPill("Detenido", "err"); $("heroTitle").textContent = "El DeX está detenido"; $("heroDesc").textContent = "El servicio fue detenido manualmente. Pulsa «Iniciar DeX» para reanudar."; }
+  else if (alive && clients > 0) { setPill("Conectado", "ok"); $("heroTitle").textContent = "Todo listo"; $("heroDesc").textContent = "DeX activo y la tablet conectada."; }
+  else if (alive) { setPill("Sin cliente", "err"); $("heroTitle").textContent = "Esperando a la tablet"; $("heroDesc").textContent = "El DeX está activo. Abre la URL en la tablet para verlo."; }
+  else { setPill("Apagado", "err"); $("heroTitle").textContent = "DeX no está corriendo"; $("heroDesc").textContent = "Pulsa «Iniciar DeX» para arrancar el servicio."; }
+
+  // pasos guiados
+  const steps = [
+    { done: alive, cur: !alive, b: "Servidor DeX", s: "El proceso scrcpy que captura y codifica la pantalla." },
+    { done: alive && clients > 0, cur: alive && clients === 0, b: "Tablet conectada", s: clients > 0 ? "Recibiendo stream." : alive ? "Abre en la tablet: https://" + (dev.ip||"<IP>") + ":8443/#auto" : "Se habilitará al iniciar el DeX." },
+    { done: alive && clients > 0 && !!c, cur: false, b: "Métricas en vivo", s: c ? "fps y latencia reportándose." : "Aparecerán al conectar la tablet." },
+  ];
+  $("steps").innerHTML = steps.map((s,i) =>
+    `<div class="step ${s.done?'done':s.cur?'cur':''}"><div class="ico">${s.done?'✓':i+1}</div><div><b>${s.b}</b><small>${esc(s.s)}</small></div></div>`).join("");
+
+  // rendimiento
+  $("mFps").textContent = c ? c.fps.toFixed(0) : "—";
+  $("mLat").innerHTML = c ? (c.total_ms.toFixed(0)+"<small>ms</small>") : "—";
+  $("mLat").className = "v " + (c ? (c.total_ms > 80 ? "r" : c.total_ms > 50 ? "o" : "g") : "");
+  $("mNet").innerHTML = c ? (c.net_ms.toFixed(0)+"<small>ms</small>") : "—";
+  $("mDrop").textContent = c ? c.dropped : "—";
+  $("mDrop").className = "v " + (c && c.dropped > 0 ? "o" : "");
+  $("mRes").textContent = cfg.width ? cfg.width+"×"+cfg.height : "—";
+
+  // sistema
+  const ram = dev.ram_used_pct;
+  $("mRam").textContent = ram != null ? ram+"%" : "—";
+  $("mRamBar").style.width = (ram||0)+"%";
+  $("mRamBar").style.background = ram > 85 ? "var(--red)" : ram > 70 ? "var(--orange)" : "var(--accent)";
+  $("mLoad").textContent = dev.load != null ? dev.load.toFixed(1) : "—";
+  $("mLoad").className = "v " + (dev.load > 8 ? "r" : dev.load > 5 ? "o" : "");
+  $("mTemp").textContent = dev.temp_c != null ? dev.temp_c+"°C" : "—";
+  $("mTemp").className = "v " + (dev.temp_c > 45 ? "r" : dev.temp_c > 40 ? "o" : "");
+  $("mBat").textContent = dev.battery != null ? dev.battery+"%" : "—";
+  const rssi = dev.wifi_rssi;
+  if (rssi != null) { const p = Math.max(0,Math.min(100,(rssi+100)*2)); $("mSig").textContent = p+"%"; $("mSig").className = "v " + (p>50?"g":p>25?"o":"r"); }
+  else { $("mSig").textContent = "—"; $("mSig").className = "v"; }
+  $("mMode").textContent = dev.mode === "hotspot" ? "Hotspot" : dev.mode === "wifi" ? "WiFi" : "—";
+
+  // botones
+  $("btnStart").disabled = alive;
+  $("btnStop").disabled = !alive;
+}
+
+async function ctrl(action, btn) {
+  const msgs = { start_dex:"Iniciando DeX…", stop_dex:"Deteniendo DeX…" };
+  const done = { start_dex:"✓ DeX iniciado", stop_dex:"✓ DeX detenido" };
+  const st = $("ctrlStatus"); st.textContent = msgs[action]; st.style.color = "var(--text2)";
+  $("btnStart").disabled = $("btnStop").disabled = true;
+  try {
+    const response = await fetch("/api/control", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({action}) });
+    if (response.status === 401) { redirectToLogin(); return; }
+    if (!response.ok) throw new Error(`control request failed: ${response.status}`);
+    const j = await response.json();
+    st.textContent = done[action] || j.result; st.style.color = "var(--green)";
+    setTimeout(() => { status(); logs(); }, 3000);
+  } catch (e) { st.textContent = "✗ error"; st.style.color = "var(--red)"; }
+  setTimeout(status, 800);
+}
+
+async function initialize() {
+  try {
+    const response = await fetch("/api/session", { cache: "no-store" });
+    if (response.status === 401) { redirectToLogin(); return; }
+    if (!response.ok) throw new Error(`session request failed: ${response.status}`);
+    const session = await response.json();
+    if (session.role !== "admin") $("controlsSection").hidden = true;
+    await Promise.all([status(), logs()]);
+    setInterval(status, 1500);
+    setInterval(logs, 3000);
+  } catch (e) {
+    setPill("Sin conexión al bridge", "err");
+  }
+}
+
+$("btnLogout").addEventListener("click", async () => {
+  try { await fetch("/api/logout", { method: "POST" }); } finally { redirectToLogin(); }
+});
+
+initialize();
+</script>
+</body>
+</html>

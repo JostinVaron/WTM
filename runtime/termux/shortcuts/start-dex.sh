@@ -1,0 +1,70 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -uo pipefail
+
+export PATH=/data/data/com.termux/files/usr/bin:/system/bin:/system/xbin
+export HOME=/data/data/com.termux/files/home
+export PREFIX=/data/data/com.termux/files/usr
+
+DEX_DIR="$HOME/dex"
+LOG="$PREFIX/tmp/rd-start.log"
+PORT="${PORT:-8443}"
+HEALTH_URL="https://127.0.0.1:$PORT/healthz"
+mkdir -p "$PREFIX/tmp"
+exec >>"$LOG" 2>&1
+log(){ printf '[start-dex] %s %s\n' "$(date '+%F %T')" "$*"; }
+notify(){
+    if command -v termux-toast >/dev/null 2>&1; then
+        if command -v pm >/dev/null 2>&1 && pm path com.termux.api >/dev/null 2>&1; then
+            timeout 3 termux-toast "$1" || log "La notificación falló o excedió 3 segundos."
+        else
+            log "Termux:API no está instalado; no se puede mostrar un toast."
+        fi
+    else
+        log "termux-toast no está disponible; consulta $LOG."
+    fi
+}
+
+log "Solicitando inicio nativo de DeX."
+if ! cd "$DEX_DIR"; then
+    log "No existe el directorio $DEX_DIR."
+    notify "No se pudo iniciar DeX: falta el directorio del servicio."
+    exit 1
+fi
+
+if command -v termux-wake-lock >/dev/null 2>&1; then
+    timeout 3 termux-wake-lock || log "No se pudo establecer el wake-lock o excedió 3 segundos."
+else
+    log "termux-wake-lock no está disponible."
+fi
+
+if ! bash ./dex.sh; then
+    log "dex.sh terminó con error."
+    notify "No se pudo iniciar DeX. Revisa $LOG."
+    exit 1
+fi
+
+ready_samples=0
+for _ in $(seq 1 30); do
+    response=$(curl -sk --max-time 2 "$HEALTH_URL" 2>/dev/null || true)
+    if [ -n "$response" ] && printf '%s' "$response" | python3 -c \
+        'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("scrcpy_alive") else 1)' \
+        >/dev/null 2>&1; then
+        ready_samples=$((ready_samples + 1))
+        if [ "$ready_samples" -ge 3 ]; then
+            break
+        fi
+    else
+        ready_samples=0
+    fi
+    sleep 1
+done
+
+if [ "$ready_samples" -lt 3 ]; then
+    log "No hubo 3 verificaciones consecutivas de scrcpy_alive=true dentro de 30 segundos."
+    curl -sk --max-time 2 "$HEALTH_URL" >>"$LOG" 2>&1 || true
+    notify "DeX no quedó listo. Revisa $LOG."
+    exit 1
+fi
+
+log "DeX listo; bridge y scrcpy confirmados."
+notify "DeX listo: el stream está conectado."

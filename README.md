@@ -68,6 +68,7 @@ is not used for video.
 - [Hardware, operating-system, and network requirements](docs/requirements.md)
 - [Performance measurements and acceptance criteria](docs/performance.md)
 - [Current Termux deployment and reproduction guide](docs/deployment-termux.md)
+- [Runtime release candidate (unpublished)](docs/runtime-release-candidate.md)
 - [Security and privacy](SECURITY.md)
 - [License status](NO-LICENSE.md)
 - [Issue, milestone, and release policy](docs/project-governance.md)
@@ -85,16 +86,19 @@ is not used for video.
    that the debugging service remains enabled.
 3. **60 FPS is a cap, not an end-to-end guarantee.** The phone can produce near-60 FPS
    under some scenes while Chrome drops far below that rate under complex motion.
-4. **No security boundary is established.** The current HTTPS certificate is
-   self-signed and the relay has an unauthenticated control endpoint capable of
-   starting/stopping Termux scripts. Do not expose the current service to untrusted
-   networks; see [Security](SECURITY.md).
-5. **This repository does not yet include a redistributable app or runtime bundle.**
-   The relay source and browser client (`server.py`, `index.html`, `panel.html`), launcher
-   and watchdog scripts, scrcpy server artifact, signing material, private TLS keys, and
-   raw device logs are deliberately excluded. The deployment guide is not a
-   clone-and-run installation procedure; it describes a runtime already installed
-   separately on the test phone.
+4. **The deployed prototype has no security boundary.** The prototype currently
+   deployed on the S25 uses a self-signed certificate and an unauthenticated control
+   endpoint capable of starting/stopping Termux scripts. Do not expose it to untrusted
+   networks; see [Security](SECURITY.md). A hardened release candidate exists on branch
+   `executable-release-candidate` (cookie auth, Origin/Host checks, TLS fail-closed,
+   admin-only control) but is not published, not deployed and not independently
+   reviewed; see [runtime release candidate](docs/runtime-release-candidate.md).
+5. **This repository has no published runtime bundle.** The `main` branch carries the
+   documentation handoff only. The release-candidate branch adds the relay source,
+   browser clients, launcher/watchdog scripts, an idempotent Termux installer that
+   downloads the official scrcpy server with a pinned checksum, and automated security
+   tests — but it cannot be published until the owner chooses a license and the
+   hardening passes independent review.
 
 ## Hardware requirements: what we can and cannot claim
 

@@ -11,4 +11,8 @@ artifacts from the prototype until the owner:
 3. audits licenses and notices for scrcpy, Android/R8 artifacts and other dependencies;
 4. decides which artifacts can legally and safely be distributed.
 
+Note: scrcpy itself is published by Genymobile under Apache-2.0. That license covers
+the upstream scrcpy server artifact, not the WTM project files. The WTM sources remain
+unlicensed regardless of the third-party licenses of its dependencies.
+
 This documentation is a technical handoff, not a license grant.

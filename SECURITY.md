@@ -55,3 +55,14 @@ the issue.
 - audit ADB exposure and ensure no remote ADB server is opened to the LAN;
 - scan dependency/artifact provenance and licenses;
 - test behavior when Wi-Fi changes, peers disconnect, and permissions are revoked.
+
+## Release-candidate hardening status
+
+The branch `executable-release-candidate` packages a hardened runtime that addresses
+several items above: session authentication with separate viewer/admin tokens, a
+same-site Origin check, a Host allowlist, TLS fail-closed startup with validity-window
+validation, a loopback-only unauthenticated health endpoint, fixed allowlisted control
+actions, and login throttling. These controls have automated tests but have **not** been
+independently reviewed and are **not deployed** on the prototype or published. They do
+not make the system "impenetrable"; they reduce specific documented risks. See
+[runtime release candidate](docs/runtime-release-candidate.md).
