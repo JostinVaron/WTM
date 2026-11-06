@@ -877,7 +877,13 @@ async def supervisor(state):
                 hw_ok = False
             await asyncio.sleep(1)
         else:
-            await capd_reader(state)
+            try:
+                await capd_reader(state)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                print(f"[stream] capd unavailable or failed: {e}; retry in 1s", flush=True)
+                await asyncio.sleep(1)
 
 
 # ------------------------------------------------ scrcpy control protocol
@@ -1597,11 +1603,17 @@ async def on_startup(app):
 
 
 async def on_cleanup(app):
-    app["ffmpeg_task"].cancel()
-    try:
-        await app["ffmpeg_task"]
-    except asyncio.CancelledError:
-        pass
+    for task_key in ("ffmpeg_task", "wd_task"):
+        task = app.get(task_key)
+        if task is None:
+            continue
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            print(f"[server] cleanup: {task_key} ended with {exc!r}", flush=True)
     scrcpy_control.close()
 
 
