@@ -41,6 +41,7 @@ jobs:
               runtime/termux/watchdog.sh \
               runtime/termux/update-network.sh \
               runtime/termux/find-adb-port.py \
+              runtime/termux/VERSION \
               runtime/termux/shortcuts \
               runtime/termux/boot \
               runtime/termux/tests \
