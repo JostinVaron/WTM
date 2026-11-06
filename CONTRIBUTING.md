@@ -22,6 +22,27 @@ a valid FPS workload.
 
 ## Licensing
 
-The project license has not yet been selected. Do not submit or redistribute code under
-the assumption that this repository already grants a license. Third-party binaries and
-sources require provenance, notices and redistribution review.
+Software is licensed under [PolyForm Noncommercial 1.0.0](../LICENSE) and
+documentation under [CC BY-NC 4.0](../LICENSE-docs.txt); see
+[Licensing](../LICENSING.md). Both permit non-commercial use, modification and
+sharing with attribution. Do not add third-party binaries or sources without
+provenance, notices and redistribution review.
+
+## Running the tests
+
+The runtime tests run on any host with Python 3.10+ and aiohttp:
+
+```sh
+cd runtime/termux
+python3 -m unittest tests.test_server_security tests.test_server_live
+```
+
+The device certification script must run in Termux on the source phone after
+`install.sh`:
+
+```sh
+cd ~/dex
+bash tests/device-smoke.sh
+```
+
+See [certification](docs/certification.md) for what each suite covers.

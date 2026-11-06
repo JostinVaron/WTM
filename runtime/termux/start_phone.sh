@@ -23,7 +23,7 @@ export FPS="${FPS:-60}"
 : "${WTM_AUTH_FILE:=$HOME/.config/wtm/auth-tokens.json}"
 : "${CERT:=$HOME/.config/wtm/cert.pem}"
 : "${KEY:=$HOME/.config/wtm/key.pem}"
-: "${WTM_BIND_HOST:=0.0.0.0}"
+: "${WTM_BIND_HOST:=127.0.0.1}"
 : "${WTM_ALLOWED_HOSTS:?Set WTM_ALLOWED_HOSTS in $CONFIG to the approved HTTPS host of the phone}"
 
 echo $$ > "$PWD/stream.pid"

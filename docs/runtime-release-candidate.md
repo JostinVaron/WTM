@@ -2,9 +2,10 @@
 
 This branch packages the active Termux runtime as a repeatable install, adds
 per-install credentials and session authentication, and records the security
-tests that back those changes. It is **not published and not deployed** on the
-prototype phone yet. Nothing here changes the license status: see
-[No license](../NO-LICENSE.md).
+tests that back those changes. It is **not yet deployed** on the prototype
+phone. Licensing: [PolyForm Noncommercial 1.0.0](../LICENSE) for software,
+[CC BY-NC 4.0](../LICENSE-docs.txt) for documentation — see
+[Licensing](../LICENSING.md).
 
 ## What changed compared to the published documentation
 
@@ -16,7 +17,9 @@ prototype phone yet. Nothing here changes the license status: see
 | Host/Origin | Any host accepted, bound to 0.0.0.0 | Host allowlist (`WTM_ALLOWED_HOSTS`); same-site Origin required for POST/WS |
 | Health checks | `/stats`, `/api/status` used by scripts | New `/healthz` (loopback-only, no auth) used by scripts; `/api/*` requires a session |
 | Secrets | Shared cert/key inside the project tree | Generated per install under `~/.config/wtm/` (tokens, cert, key, `server.env`), outside the repository |
-| Install | Manual copy of an existing tree | `runtime/termux/install.sh`: idempotent, installs Termux packages, copies sources, downloads the official scrcpy server with pinned SHA-256, generates credentials, installs Termux:Widget shortcuts and Termux:Boot hook |
+| Certificate trust | Click-through certificate warning | Per-install SHA-256 fingerprint shown at install, on `/login`, in the panel and on `/healthz`; users must compare on first connect |
+| Listener | Bound to 0.0.0.0 | Binds to the detected Wi-Fi IP by default; `update-network.sh` refreshes bind and certificate when the network changes; `0.0.0.0` only as an explicit override |
+| Install | Manual copy of an existing tree | `runtime/termux/install.sh`: idempotent, installs Termux packages, copies sources, downloads the official scrcpy server with pinned SHA-256, pins `aiohttp==3.14.5`, generates credentials, installs Termux:Widget shortcuts and Termux:Boot hook |
 | Device model | Hard-coded `SM-S931B` | `WTM_PHONE_MODEL` (default `SM-S931B`); multiple matching devices abort instead of guessing |
 | Client UI | `panel.html` offered a mouse-routing button | Mouse-routing control removed (server no longer supports it); login-aware clients redirect to `/login` on 401; logout button |
 
@@ -25,11 +28,14 @@ prototype phone yet. Nothing here changes the license status: see
 - `runtime/termux/server.py` — hardened relay (TLS, auth, allowlist, role checks).
 - `runtime/termux/web/index.html`, `runtime/termux/web/panel.html` — login-aware clients.
 - `runtime/termux/dex.sh`, `scrcpy-phone.sh`, `watchdog.sh`, `start_phone.sh`,
-  `find-adb-port.py` — launcher/watchdog scripts reading `~/.config/wtm/server.env`.
+  `update-network.sh`, `find-adb-port.py` — launcher/watchdog scripts reading
+  `~/.config/wtm/server.env`.
 - `runtime/termux/shortcuts/start-dex.sh`, `runtime/termux/shortcuts/stop-dex.sh`,
   `runtime/termux/boot/01-dex.sh` — Termux integration points.
 - `runtime/termux/install.sh` — idempotent Termux installer.
 - `runtime/termux/tests/test_server_security.py` — 18 automated tests.
+- `runtime/termux/tests/test_server_live.py` — 8 process-level tests with real TLS.
+- `runtime/termux/tests/device-smoke.sh` — on-device certification script (Termux).
 
 ## Provenance of the only binary dependency
 
@@ -38,36 +44,39 @@ prototype phone yet. Nothing here changes the license status: see
 and verifies SHA-256 `764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536`
 before use. That hash was verified on 2026-11-06 against the upstream release asset
 and matches the artifact already deployed on the prototype. scrcpy is published by
-Genymobile under Apache-2.0; WTM itself has no license yet.
+Genymobile under Apache-2.0; WTM is licensed as described in
+[Licensing](../LICENSING.md).
 
 ## Automated validation performed
 
 - `python3 -m unittest tests.test_server_security` — 18/18 pass (auth config,
   TLS fail-closed, Host allowlist, Origin enforcement, login/session flow,
   role separation, throttling, security headers, healthz access rules).
-- `bash -n` on all eight shell scripts.
+- `python3 -m unittest tests.test_server_live` — 8/8 pass (real server
+  process, real TLS, healthz, fingerprint on login, WebSocket gating, viewer
+  limits, admin control spawn, logout).
+- `bash -n` on all ten shell scripts (including `tests/device-smoke.sh`).
 - `python3 -m py_compile` on the Python sources.
 - `node --check` on the inline JavaScript of both browser clients.
 - scrcpy server checksum verified against the upstream release asset.
 
 The tests run on a host Python 3.14 with aiohttp 3.14.5; they do not exercise
-Termux, ADB, MediaCodec or a real client, and are not a substitute for a
-security review or for on-device testing.
+Termux, ADB, MediaCodec or a real client. See
+[certification](certification.md) for the full evidence table and the pending
+on-device run.
 
-## What still blocks publication
+## Publication status
 
-1. **License.** The owner has not selected a license. Without one, the sources
-   must not be published as redistributable code.
-2. **Independent security review.** The hardening is self-tested; it has not
-   been independently reviewed, and shared-token authentication is not a
-   perfect boundary (tokens are secrets, not user identities).
-3. **On-device acceptance.** The candidate has not been installed or run on
-   the S25; TLS/certificate trust in Chrome and the full start/stop flow must
-   be exercised on the real pair.
-4. **Deployment migration.** Replacing the deployed prototype with this
-   candidate changes the start flow (login required) and removes the
-   mouse-routing control; this must be validated with the user before it
-   becomes the production path.
+The candidate sources were merged to `main` and published after:
+
+1. **License** — selected by the owner: PolyForm Noncommercial 1.0.0 for
+   software, CC BY-NC 4.0 for documentation.
+2. **Independent security review** — completed; no CRITICAL/HIGH findings.
+   The two MEDIUM findings (certificate click-through MITM path, 0.0.0.0
+   default bind) and the LOW findings were fixed and re-tested.
+3. **On-device acceptance** — still pending. The `device-smoke.sh`
+   certification has not been executed on the S25, so the published material
+   labels the runtime as tested-in-host, not hardware-certified.
 
 Do not claim this code is "impenetrable" or "secure". It has concrete,
 documented controls and passing tests for those controls, nothing more.

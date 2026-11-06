@@ -21,6 +21,7 @@ Env: DISPLAY(:1) W H FPS PORT CRF PRESET GOP VIDEO_BITRATE CERT KEY
 import asyncio
 import base64
 import calendar
+import hashlib
 import hmac
 import ipaddress
 import json
@@ -112,7 +113,20 @@ def load_server_config():
         "bind_host": bind_host,
         "allowed_hosts": allowed_hosts,
         "ssl_context": ctx,
+        "cert_fingerprint": pem_fingerprint(cert),
     }
+
+
+def pem_fingerprint(cert):
+    """SHA-256 fingerprint of the PEM certificate, colon-separated.
+
+    Used for first-connection verification: the value printed at install
+    time must match the value shown by the server; a mismatch indicates a
+    different server (possible active man-in-the-middle).
+    """
+    with open(cert, "rb") as handle:
+        digest = hashlib.sha256(handle.read()).hexdigest().upper()
+    return ":".join(digest[i:i + 2] for i in range(0, 64, 2))
 
 
 def validate_cert_chain(cert, key):
@@ -154,13 +168,14 @@ def validate_cert_chain(cert, key):
     return ctx
 
 
-def build_app(auth_tokens, allowed_hosts):
+def build_app(auth_tokens, allowed_hosts, cert_fingerprint=""):
     app = web.Application(
         middlewares=[security_middleware],
         client_max_size=4096,
     )
     app["auth_tokens"] = auth_tokens
     app["allowed_hosts"] = allowed_hosts
+    app["cert_fingerprint"] = cert_fingerprint
     app["state"] = StreamState()
     app.router.add_get("/healthz", health_handler)
     app.router.add_get("/login", login_handler)
@@ -1197,6 +1212,11 @@ async def login_handler(request):
     if next_path not in {"/", "/panel"}:
         next_path = "/"
     destination = json.dumps(next_path)
+    fingerprint = request.app.get("cert_fingerprint", "")
+    fingerprint_html = (
+        f"<p>Huella SHA-256 del certificado: <code>{fingerprint}</code></p>"
+        if fingerprint else ""
+    )
     return web.Response(
         text=f"""<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
@@ -1204,6 +1224,9 @@ async def login_handler(request):
 <style>body{{font:16px sans-serif;max-width:28rem;margin:15vh auto;padding:1rem;background:#111;color:#eee}}
 input,button{{font:inherit;padding:.7rem;width:100%;margin:.5rem 0}}#error{{color:#f88}}</style>
 <h1>WTM</h1><p>Introduce el token de acceso local creado durante la instalación.</p>
+{fingerprint_html}
+<p>Verifica que la huella coincide con la mostrada al instalar. Si no coincide,
+no introduzcas ningún token: alguien podría estar interceptando la conexión.</p>
 <form id="login"><label for="token">Access token</label>
 <input id="token" type="password" autocomplete="current-password" required>
 <button>Iniciar sesión</button><p id="error" role="alert"></p></form>
@@ -1308,7 +1331,7 @@ CLIENT_STATS_RE = re.compile(
 
 
 async def log_handler(request):
-    text = (await request.text())[:400]
+    text = re.sub(r"[\x00-\x1f\x7f]", "", (await request.text())[:400])
     print("[client] " + text, flush=True)
     m = CLIENT_STATS_RE.search(text)
     if m:
@@ -1429,6 +1452,7 @@ async def health_handler(request):
     return web.json_response({
         "ok": True,
         "scrcpy_alive": state.scrcpy_connected,
+        "tls_fingerprint": request.app.get("cert_fingerprint", ""),
     })
 
 
@@ -1503,6 +1527,7 @@ async def api_status_handler(request):
         "scrcpy_w": s.scrcpy_w, "scrcpy_h": s.scrcpy_h,
         "scrcpy_alive": s.scrcpy_connected,
         "dex_stopped": os.path.exists(f"{TMPDIR}/rd-dex-stopped"),
+        "tls_fingerprint": request.app.get("cert_fingerprint", ""),
         "time": time.time(),
     })
 
@@ -1608,7 +1633,8 @@ def main():
     bind_host = config["bind_host"]
     ctx = config["ssl_context"]
     boost_priority()
-    app = build_app(auth_tokens, config["allowed_hosts"])
+    app = build_app(auth_tokens, config["allowed_hosts"],
+                    cert_fingerprint=config["cert_fingerprint"])
     print(
         f"[server] {DISPLAY} {W}x{H}@{FPS} crf={CRF} preset={PRESET} "
         f"on https://{bind_host}:{PORT}",

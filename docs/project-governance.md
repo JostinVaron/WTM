@@ -51,6 +51,12 @@ Do not create a release until all of these are true:
 - artifacts are signed, hashes are published, and no secret signing key is committed;
 - a rollback plan and security-reporting path are available.
 
+License status on 2026-11-06: software is under PolyForm Noncommercial 1.0.0 and
+documentation under CC BY-NC 4.0 (see [Licensing](../LICENSING.md)). The runtime
+sources are published with automated tests and a completed security review
+([certification](certification.md)); the on-device smoke certification on the S25
+remains pending, so no downloadable release or "certified deployment" claim is made.
+
 GitHub issues, labels and releases should be created by an authenticated repository
 owner after the repository is established. This documentation does not fabricate
 completed issue IDs, milestones or release tags.

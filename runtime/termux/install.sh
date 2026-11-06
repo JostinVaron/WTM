@@ -21,9 +21,10 @@ HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
 INSTALL_DIR="${WTM_INSTALL_DIR:-$HOME_DIR/dex}"
 CONFIG_DIR="$HOME_DIR/.config/wtm"
 PORT="${WTM_PORT:-8443}"
-BIND_HOST="${WTM_BIND_HOST:-0.0.0.0}"
+BIND_HOST="${WTM_BIND_HOST:-}"
 PHONE_MODEL="${WTM_PHONE_MODEL:-SM-S931B}"
 SCRCPY_VERSION="5.0.1"
+AIOHTTP_PIN="3.14.5"
 SCRCPY_URL="https://github.com/Genymobile/scrcpy/releases/download/v${SCRCPY_VERSION}/scrcpy-server-v${SCRCPY_VERSION}"
 # SHA-256 del artefacto OFICIAL de Genymobile/scrcpy v5.0.1.
 SCRCPY_SHA256="764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536"
@@ -45,6 +46,10 @@ else
     [ -z "$ALLOWED_HOSTS" ] && fail "No se detectó una IP LAN; define WTM_ALLOWED_HOSTS manualmente."
 fi
 log "IP autorizada para el navegador: $ALLOWED_HOSTS"
+if [ -z "$BIND_HOST" ]; then
+    BIND_HOST="$ALLOWED_HOSTS"
+    log "El servicio escuchará solo en $BIND_HOST (para cambiarlo, define WTM_BIND_HOST)."
+fi
 
 # --- 1. dependencias -------------------------------------------------------
 for pkgname in python aiohttp openssl curl; do
@@ -55,14 +60,14 @@ for pkgname in python aiohttp openssl curl; do
 done
 command -v "$PREFIX/bin/python3" >/dev/null 2>&1 || fail "python3 no está disponible."
 if ! "$PREFIX/bin/python3" -c 'import aiohttp' >/dev/null 2>&1; then
-    log "Instalando aiohttp con pip."
-    "$PREFIX/bin/pip" install aiohttp >/dev/null 2>&1 || "$PREFIX/bin/pip3" install aiohttp || \
-        fail "No se pudo instalar aiohttp."
+    log "Instalando aiohttp $AIOHTTP_PIN con pip (versión fijada)."
+    "$PREFIX/bin/pip" install "aiohttp==${AIOHTTP_PIN}" >/dev/null 2>&1 || "$PREFIX/bin/pip3" install "aiohttp==${AIOHTTP_PIN}" || \
+        fail "No se pudo instalar aiohttp $AIOHTTP_PIN."
 fi
 
 # --- 2. copiar fuentes (idempotente) ---------------------------------------
 mkdir -p "$INSTALL_DIR/web" "$INSTALL_DIR/jvm"
-for item in server.py dex.sh scrcpy-phone.sh watchdog.sh find-adb-port.py start_phone.sh; do
+for item in server.py dex.sh scrcpy-phone.sh watchdog.sh find-adb-port.py start_phone.sh update-network.sh; do
     [ -f "$SOURCE_DIR/$item" ] || fail "Falta $item en el paquete."
     if ! cmp -s "$SOURCE_DIR/$item" "$INSTALL_DIR/$item" 2>/dev/null; then
         cp "$SOURCE_DIR/$item" "$INSTALL_DIR/$item"
@@ -77,7 +82,8 @@ for item in index.html panel.html; do
     fi
 done
 chmod +x "$INSTALL_DIR/dex.sh" "$INSTALL_DIR/scrcpy-phone.sh" \
-        "$INSTALL_DIR/watchdog.sh" "$INSTALL_DIR/start_phone.sh"
+        "$INSTALL_DIR/watchdog.sh" "$INSTALL_DIR/start_phone.sh" \
+        "$INSTALL_DIR/update-network.sh"
 
 # --- 3. scrcpy-server oficial con checksum ---------------------------------
 JAR="$INSTALL_DIR/jvm/scrcpy-server"
@@ -128,6 +134,7 @@ fi
 
 CERT="$CONFIG_DIR/cert.pem"
 KEY="$CONFIG_DIR/key.pem"
+FINGERPRINT_FILE="$CONFIG_DIR/cert-fingerprint.txt"
 if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
     log "Generando certificado y llave TLS propios de esta instalación."
     openssl req -x509 -newkey rsa:2048 -keyout "$KEY" -out "$CERT" \
@@ -139,6 +146,17 @@ if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
 else
     log "Se conserva el material TLS existente en $CONFIG_DIR."
 fi
+FINGERPRINT="$("$PREFIX/bin/python3" - <<'PY'
+import hashlib, sys
+digest = hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest().upper()
+print(":".join(digest[i:i+2] for i in range(0, 64, 2)))
+PY
+"$CERT")"
+printf '%s\n' "$FINGERPRINT" >"$FINGERPRINT_FILE"
+chmod 644 "$FINGERPRINT_FILE"
+log "Huella SHA-256 del certificado: $FINGERPRINT"
+log "Guarda esta huella: al abrir la página en la tablet, compárala con la mostrada en /login."
+log "Si no coincide, NO introduzcas ningún token: la conexión puede estar interceptada."
 
 ENV_FILE="$CONFIG_DIR/server.env"
 if [ ! -f "$ENV_FILE" ]; then
@@ -185,5 +203,8 @@ fi
 # --- 6. resumen ------------------------------------------------------------
 log "Instalación completa en $INSTALL_DIR."
 log "Inicia el servicio: bash $HOME_DIR/.shortcuts/start-dex.sh"
-log "Abre en la tablet: https://$ALLOWED_HOSTS:$PORT/  (confirma el certificado en Chrome)."
+log "Abre en la tablet: https://$ALLOWED_HOSTS:$PORT/"
+log "En el primer acceso, VERIFICA que la huella del certificado mostrada"
+log "en la página coincide con $FINGERPRINT ($FINGERPRINT_FILE)."
+log "Si no coincide, no introduzcas tokens y revisa la red."
 log "Verificación local: curl -sk https://127.0.0.1:$PORT/healthz"

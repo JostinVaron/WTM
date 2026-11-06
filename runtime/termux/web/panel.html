@@ -122,6 +122,7 @@
       <div class="metric"><div class="k">Batería</div><div class="v" id="mBat">—</div></div>
       <div class="metric"><div class="k">Señal WiFi</div><div class="v" id="mSig">—</div></div>
       <div class="metric"><div class="k">Modo</div><div class="v" id="mMode" style="font-size:19px">—</div></div>
+      <div class="metric" style="grid-column:1/-1"><div class="k">Huella TLS (verifica en el primer acceso)</div><div class="v" id="mTls" style="font-size:12px;word-break:break-all">—</div></div>
     </div>
   </section>
 
@@ -216,6 +217,7 @@ function render(d) {
   if (rssi != null) { const p = Math.max(0,Math.min(100,(rssi+100)*2)); $("mSig").textContent = p+"%"; $("mSig").className = "v " + (p>50?"g":p>25?"o":"r"); }
   else { $("mSig").textContent = "—"; $("mSig").className = "v"; }
   $("mMode").textContent = dev.mode === "hotspot" ? "Hotspot" : dev.mode === "wifi" ? "WiFi" : "—";
+  $("mTls").textContent = d.tls_fingerprint || "—";
 
   // botones
   $("btnStart").disabled = alive;

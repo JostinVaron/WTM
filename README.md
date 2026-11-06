@@ -68,9 +68,10 @@ is not used for video.
 - [Hardware, operating-system, and network requirements](docs/requirements.md)
 - [Performance measurements and acceptance criteria](docs/performance.md)
 - [Current Termux deployment and reproduction guide](docs/deployment-termux.md)
-- [Runtime release candidate (unpublished)](docs/runtime-release-candidate.md)
+- [Runtime release candidate](docs/runtime-release-candidate.md)
+- [Certification and tests](docs/certification.md)
 - [Security and privacy](SECURITY.md)
-- [License status](NO-LICENSE.md)
+- [Licensing](LICENSING.md)
 - [Issue, milestone, and release policy](docs/project-governance.md)
 - [GitHub publication/authentication](docs/publishing.md)
 - [Contribution guide](CONTRIBUTING.md)
@@ -93,12 +94,13 @@ is not used for video.
    `executable-release-candidate` (cookie auth, Origin/Host checks, TLS fail-closed,
    admin-only control) but is not published, not deployed and not independently
    reviewed; see [runtime release candidate](docs/runtime-release-candidate.md).
-5. **This repository has no published runtime bundle.** The `main` branch carries the
-   documentation handoff only. The release-candidate branch adds the relay source,
-   browser clients, launcher/watchdog scripts, an idempotent Termux installer that
-   downloads the official scrcpy server with a pinned checksum, and automated security
-   tests — but it cannot be published until the owner chooses a license and the
-   hardening passes independent review.
+5. **The runtime is published but not hardware-certified.** `main` includes the
+   relay source, browser clients, launcher/watchdog scripts, an idempotent Termux
+   installer that downloads the official scrcpy server with a pinned checksum, and
+   automated security tests (26/26 passing) plus a completed independent security
+   review. The on-device certification (`runtime/termux/tests/device-smoke.sh`) has
+   not been executed on the S25 yet, so the deployed prototype is not certified.
+   See [certification](docs/certification.md).
 
 ## Hardware requirements: what we can and cannot claim
 
@@ -106,17 +108,24 @@ The only tested baseline is the pair above. It is not scientifically valid to in
 minimum RAM or CPU threshold from one device pair. The requirements document therefore
 labels the observed baseline separately from provisional recommendations and unknowns.
 
-The current source project has no approved open-source license. Until the owner selects
-one and third-party notices are reviewed, do not redistribute implementation code or
-build artifacts as an official WTM release. See [license status](NO-LICENSE.md).
+The current source project is licensed for non-commercial use: software under
+[PolyForm Noncommercial 1.0.0](LICENSE) and documentation under
+[CC BY-NC 4.0](LICENSE-docs.txt). These are source-available licenses, not
+OSI-approved "open source"; commercial use requires separate permission.
+See [licensing](LICENSING.md) and third-party notices in
+[dependencies](docs/dependencies.md).
 
 ## Repository status
 
 - Public repository: [JostinVaron/WTM](https://github.com/JostinVaron/WTM)
-- Version: **unreleased prototype / documentation baseline**
+- Version: **unreleased prototype / runtime published as source**
+- License: software [PolyForm Noncommercial 1.0.0](LICENSE), documentation
+  [CC BY-NC 4.0](LICENSE-docs.txt) — see [Licensing](LICENSING.md)
 - Supported installations: **none formally**
 - Latest tested configuration: **S25 + Tab S6 Lite, 2000 x 1200 / configured 60 FPS**
-- Downloadable app: **not available**
+- Downloadable app: **not available**; source-only Termux installer in `runtime/termux/`
+- Automated tests: 26/26 passing (host), independent security review completed
+- On-device certification: **pending** (see [certification](docs/certification.md))
 - Public issue templates: available in `.github/ISSUE_TEMPLATE/`
 - Release artifacts: **none**
 
