@@ -38,8 +38,11 @@ is_termux(){ [ -d "$PREFIX/usr" ] && [ -x "$PREFIX/bin/pkg" ] && [ -d "$HOME_DIR
 is_termux || fail "Este instalador debe ejecutarse en Termux en el teléfono fuente."
 [ -d "$SOURCE_DIR/web" ] || fail "No se encontró web/ junto a install.sh."
 
-# --- 1. dependencias (ANTES de detectar la IP: 'ip' viene de iproute2) ----
+# --- 1. dependencias -------------------------------------------------------
 # Nota: en Termux 'openssl' son solo las librerías; el comando es 'openssl-tool'.
+# iproute2 se instala por completitud, pero Android moderno restringe los sockets
+# netlink para apps normales, así que 'ip' falla con "Permission denied" en
+# teléfonos recientes; la detección de IP usa entonces el fallback de Python.
 for pkgname in python aiohttp openssl openssl-tool curl iproute2; do
     if ! "$PREFIX/bin/pkg" list-installed 2>/dev/null | grep -q "^$pkgname\$"; then
         log "Instalando dependencia: $pkgname"
@@ -59,6 +62,24 @@ if [ -n "${WTM_ALLOWED_HOSTS:-}" ]; then
 else
     ALLOWED_HOSTS="$(ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
     [ -z "$ALLOWED_HOSTS" ] && ALLOWED_HOSTS="$(ip -4 addr show swlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
+    if [ -z "$ALLOWED_HOSTS" ]; then
+        # Fallback sin netlink: un socket UDP no envía paquetes, solo consulta
+        # al enrutador de Android qué IP local usaría hacia 8.8.8.8. Funciona
+        # en Android moderno donde netlink está restringido para apps.
+        ALLOWED_HOSTS="$("$PREFIX/bin/python3" - <<'PY'
+import socket
+try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("8.8.8.8", 80))
+    ip = s.getsockname()[0]
+    s.close()
+    if ip and not ip.startswith("0.") and ip != "127.0.0.1":
+        print(ip)
+except Exception:
+    pass
+PY
+)"
+    fi
     [ -z "$ALLOWED_HOSTS" ] && fail "No se detectó una IP LAN; define WTM_ALLOWED_HOSTS manualmente."
 fi
 log "IP autorizada para el navegador: $ALLOWED_HOSTS"
