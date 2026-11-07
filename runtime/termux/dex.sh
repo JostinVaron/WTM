@@ -29,7 +29,7 @@ bridge_up(){ curl -sk --max-time 2 "https://${WTM_BIND_HOST:-127.0.0.1}:$PORT/he
 stream_ready(){
     curl -sk --max-time 2 "https://${WTM_BIND_HOST:-127.0.0.1}:$PORT/healthz" 2>/dev/null |
         python3 -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("scrcpy_alive") else 1)' \
-            >/dev/null 2>&1
+        >/dev/null 2>&1
 }
 find_phone(){
     local matches="" serial model
@@ -124,3 +124,21 @@ fi
 IP=$("$ADB" -s "$PHONE" shell "ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print \$2}'" 2>/dev/null | tr -d '\r')
 [ -z "$IP" ] && IP=$("$ADB" -s "$PHONE" shell "ip -4 addr show swlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print \$2}'" 2>/dev/null | tr -d '\r')
 log "LISTO: bridge y scrcpy activos. Tablet: https://${IP:-<IP>}:$PORT/#auto"
+
+# Enrutador del mouse FÍSICO Bluetooth del teléfono: al iniciar el DeX, los
+# movimientos/clics del mouse se inyectan al display virtual (el cursor se ve
+# en la tablet). stop-dex.sh lo mata, y el mouse vuelve a la pantalla física.
+# Sin root los eventos no se pueden "consumir": mientras el DeX esté activo el
+# puntero también se moverá en la pantalla del teléfono (inofensivo). Si no hay
+# mouse conectado, el enrutador simplemente espera a que lo enciendas.
+if [ -f "$PWD/mouse-route.py" ]; then
+    if [ -r "$TMPDIR/rd-mouse.pid" ] && kill -0 "$(tr -cd '0-9' <"$TMPDIR/rd-mouse.pid" 2>/dev/null)" 2>/dev/null; then
+        log "enrutador de mouse ya estaba activo; no se duplica."
+    else
+        nohup "$PREFIX/bin/python3" "$PWD/mouse-route.py" >>"$TMPDIR/rd-mouse.log" 2>&1 &
+        echo "$!" >"$TMPDIR/rd-mouse.pid"
+        log "enrutador de mouse físico iniciado (log: $TMPDIR/rd-mouse.log)."
+    fi
+else
+    log "mouse-route.py no presente; el mouse físico seguirá solo en la pantalla del teléfono."
+fi
