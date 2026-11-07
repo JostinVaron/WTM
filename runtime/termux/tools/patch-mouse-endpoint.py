@@ -20,7 +20,8 @@ encuentra o si no son únicas; nunca rompe un archivo a medias):
   web/index.html:
     6. SVG del cursor + moveCursor(): dibuja la flecha en la posición recibida
        ("cursor" por WebSocket), mapeando coordenadas de video a pantalla con
-       la misma geometría que usa el input táctil.
+       la misma geometría que usa el input táctil. Cursor estilo Samsung:
+       negro con borde blanco (no la flecha blanca estilo Windows).
 
 TEMPORAL: una vez validado en hardware, ambos archivos se confirman completos
 en el repo y este parche se elimina. Uso:
@@ -72,8 +73,9 @@ async def _broadcast_cursor(state, x, y, down):
 
 async def api_mouse_handler(request):
     """Puntero físico del propio teléfono: el mouse Bluetooth se captura con
-    `adb shell getevent` (mouse-route.py) y se reenvía aquí como deltas/botones;
-    se inyectan al display virtual vía el socket de control de scrcpy."""
+    EVIOCGRAB (mouse-grab, modo exclusivo) o getevent (mouse-route.py) y se
+    reenvía aquí como deltas/botones; se inyectan al display virtual vía el
+    socket de control de scrcpy."""
     now = time.monotonic()
     if now - _mouse_events["t"] > 1.0:
         _mouse_events["t"] = now
@@ -101,7 +103,7 @@ INJECT_OLD = '''            scrcpy_control.send(ctrl_scroll(_scrcpy_x, _scrcpy_y
         elif t == "keydown":'''
 INJECT_NEW = '''            scrcpy_control.send(ctrl_scroll(_scrcpy_x, _scrcpy_y, w, h, d * n))
         elif t == "mdx":
-            # Movimiento relativo del mouse físico (mouse-route.py + getevent).
+            # Movimiento relativo del mouse físico (mouse-route.py).
             _scrcpy_x = max(0, min(w - 1, _scrcpy_x + int(data.get("dx", 0))))
             _scrcpy_y = max(0, min(h - 1, _scrcpy_y + int(data.get("dy", 0))))
             if _scrcpy_mouse_buttons:
@@ -144,7 +146,7 @@ IDX_CSS_NEW = '''           background: rgba(0,0,0,.85); color: #fff; font: 22px
 
 IDX_BODY_OLD = '''<canvas id="screen"></canvas>'''
 IDX_BODY_NEW = '''<canvas id="screen"></canvas>
-<svg id="cursor" viewBox="0 0 12 19"><path d="M1 1 L1 16 L4.8 12.4 L7.4 18.3 L9.3 17.4 L6.7 11.6 L11.5 11.5 Z" fill="#fff" stroke="#000" stroke-width="0.8" stroke-linejoin="round"/></svg>'''
+<svg id="cursor" viewBox="0 0 12 19"><path d="M1 1 L1 16 L4.8 12.4 L7.4 18.3 L9.3 17.4 L6.7 11.6 L11.5 11.5 Z" fill="#111" stroke="#fff" stroke-width="1" stroke-linejoin="round"/></svg>'''
 
 IDX_MSG_OLD = '''      if (m.type === "config") configure(m);
       else if (m.type === "sync") {'''
