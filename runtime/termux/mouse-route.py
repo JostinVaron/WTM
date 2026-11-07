@@ -11,18 +11,23 @@ root y sin APIs ocultas:
   1. Detecta los nodos /dev/input/eventN tipo mouse via `adb shell getevent -lp`
      (los nodos con BTN_LEFT y REL_X; los teclados y el touch no cumplen eso).
   2. Lee sus eventos en bruto con `adb shell getevent -lt <nodo>`.
-  3. Los reenvia (movimiento relativo, botones, rueda) al endpoint local del
+  3. Los reenvía (movimiento relativo, botones, rueda) al endpoint local del
      bridge (POST /api/mouse), que los inyecta al display virtual a traves del
      socket de control de scrcpy — el mismo camino que el touch de la tablet.
 
+Ciclo de vida: lo arranca dex.sh al iniciar el DeX y muere solo cuando el DeX se
+detiene (detecta la marca rd-dex-stopped que escribe stop-dex.sh). No requiere
+pasos manuales: si el mouse está apagado, espera y arranca cuando lo enciendas.
+
 Notas:
-- Los eventos NO se consumen: el puntero seguira moviéndose también en la
-  pantalla física del teléfono (inofensivo e inevitable sin root).
-- Si no hay ningún mouse conectado, espera y arranca solo cuando lo enciendas.
-- El bridge debe estar parcheado con el endpoint /api/mouse (tools/patch-mouse-endpoint.py).
+- Los eventos NO se consumen: el puntero también se moverá en la pantalla física
+  del teléfono (inofensivo e inevitable sin root). Al detenerse el enrutador,
+  el mouse vuelve a su comportamiento normal sin intervención.
+- El bridge debe tener el endpoint /api/mouse (tools/patch-mouse-endpoint.py; el
+  instalador lo aplica automáticamente).
 
 Config (env o ~/.config/wtm/server.env): PORT, WTM_BIND_HOST, MOUSE_SENS,
-MOUSE_FLUSH_MS, WTM_PHONE_MODEL. Detenlo con Ctrl+C o con el widget stop-dex.
+MOUSE_FLUSH_MS, WTM_PHONE_MODEL. Desactiva el enrutado con WTM_MOUSE_ROUTE=0.
 """
 import http.client
 import json
@@ -36,10 +41,16 @@ import time
 
 PREFIX = "/data/data/com.termux/files/usr"
 ADB = f"{PREFIX}/bin/adb"
+STOP_FLAG = f"{PREFIX}/tmp/rd-dex-stopped"
+PID_FILE = f"{PREFIX}/tmp/rd-mouse-route.pid"
 
 
 def log(msg):
     print(f"[mouse-route] {msg}", flush=True)
+
+
+def dex_stopped():
+    return os.path.exists(STOP_FLAG)
 
 
 def load_env():
@@ -202,6 +213,12 @@ class Router:
 
 
 def main():
+    try:
+        with open(PID_FILE, "w", encoding="ascii") as handle:
+            handle.write(str(os.getpid()))
+    except OSError:
+        pass
+
     cfg = load_env()
     host = cfg.get("WTM_BIND_HOST") or "127.0.0.1"
     port = int(cfg.get("PORT", "8443"))
@@ -215,11 +232,15 @@ def main():
         sys.exit(1)
     log(f"teléfono {serial}; bridge https://{host}:{port}")
 
-    nodes = find_mouse_nodes(serial)
+    nodes = []
     while not nodes:
-        log("no hay ningún mouse conectado al teléfono; esperando (enciende el mouse)…")
-        time.sleep(5)
+        if dex_stopped():
+            log("el DeX se detuvo antes de arrancar el enrutado; saliendo.")
+            sys.exit(0)
         nodes = find_mouse_nodes(serial)
+        if not nodes:
+            log("no hay ningún mouse conectado al teléfono; esperando (enciende el mouse)…")
+            time.sleep(5)
 
     log(f"mouse detectado en {', '.join(nodes)}")
     router = Router(serial, Bridge(host, port), sens, flush_ms)
@@ -228,7 +249,10 @@ def main():
         threading.Thread(target=router.watch_node, args=(node,), daemon=True).start()
     log("enrutando: mueve el mouse Bluetooth y verás el cursor en el DeX")
     while True:
-        time.sleep(3600)
+        time.sleep(5)
+        if dex_stopped():
+            log("el DeX se detuvo; el mouse vuelve a su comportamiento normal.")
+            sys.exit(0)
 
 
 if __name__ == "__main__":
