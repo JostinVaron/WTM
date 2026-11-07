@@ -11,8 +11,9 @@
 #       - server.env con puerto/host autorizado
 #  5. Instala los atajos de Termux:Widget y el arranque de Termux:Boot.
 #  6. Parchea server.py y web/index.html (endpoint /api/mouse + cursor en tablet).
-#  7. Compila native/mouse-grab (EVIOCGRAB: sin movimiento fantasma en el
-#     teléfono; si no compila o no corre, el enrutado cae al modo legacy con aviso).
+#  7. Compila native/mouse-grab (EVIOCGRAB: respaldo del enrutado sin fantasma).
+#  8. Copia el subsistema de ASOCIACIÓN NATIVA (route-input.sh + jvm/):
+#     la vía principal del enrutado de mouse (APIs ocultas de InputManager).
 #
 # Es idempotente: nunca sobrescribe tokens, TLS o configuración existentes.
 # No incluye secretos: todo el material sensible se crea en ~/.config/wtm.
@@ -44,9 +45,7 @@ is_termux || fail "Este instalador debe ejecutarse en Termux en el teléfono fue
 # --- 1. dependencias -------------------------------------------------------
 # Nota: en Termux 'openssl' son solo las librerías; el comando es 'openssl-tool'.
 # 'aiohttp' NO existe como paquete de Termux: se instala vía pip más abajo.
-# 'clang' compila native/mouse-grab (EVIOCGRAB): pesado pero solo se instala
-# una vez; sin él, el enrutado del mouse funciona en modo legacy (con movimiento
-# fantasma en la pantalla del teléfono).
+# 'clang' compila native/mouse-grab (respaldo EVIOCGRAB del enrutado).
 # iproute2 se instala por completitud, pero Android moderno restringe los sockets
 # netlink para apps normales, así que 'ip' falla con "Permission denied" en
 # teléfonos recientes; la detección de IP usa entonces el fallback de Python.
@@ -99,18 +98,40 @@ fi
 
 # --- 3. copiar fuentes (idempotente) ---------------------------------------
 mkdir -p "$INSTALL_DIR/web" "$INSTALL_DIR/jvm" "$INSTALL_DIR/native"
-for item in server.py dex.sh scrcpy-phone.sh watchdog.sh find-adb-port.py start_phone.sh update-network.sh mouse-route.py; do
+for item in server.py dex.sh scrcpy-phone.sh watchdog.sh find-adb-port.py start_phone.sh update-network.sh mouse-route.py route-input.sh; do
     [ -f "$SOURCE_DIR/$item" ] || fail "Falta $item en el paquete."
     if ! cmp -s "$SOURCE_DIR/$item" "$INSTALL_DIR/$item" 2>/dev/null; then
         cp "$SOURCE_DIR/$item" "$INSTALL_DIR/$item"
         log "Copiado $item"
     fi
 done
+chmod +x "$INSTALL_DIR/dex.sh" "$INSTALL_DIR/scrcpy-phone.sh" \
+        "$INSTALL_DIR/watchdog.sh" "$INSTALL_DIR/start_phone.sh" \
+        "$INSTALL_DIR/update-network.sh" "$INSTALL_DIR/route-input.sh"
 for item in index.html panel.html; do
     [ -f "$SOURCE_DIR/web/$item" ] || fail "Falta web/$item en el paquete."
     if ! cmp -s "$SOURCE_DIR/web/$item" "$INSTALL_DIR/web/$item" 2>/dev/null; then
         cp "$SOURCE_DIR/web/$item" "$INSTALL_DIR/web/$item"
         log "Copiado web/$item"
+    fi
+done
+# Subsistema de asociación nativa: fuentes java + build + jars dexeados
+for item in jvm/InputAssoc.java jvm/InputFocus.java jvm/build.sh jvm/inputassoc.zip jvm/inputfocus.zip; do
+    if [ -f "$SOURCE_DIR/$item" ]; then
+        if ! cmp -s "$SOURCE_DIR/$item" "$INSTALL_DIR/$item" 2>/dev/null; then
+            cp "$SOURCE_DIR/$item" "$INSTALL_DIR/$item"
+            log "Copiado $item"
+        fi
+    else
+        case "$item" in
+            jvm/inputassoc.zip|jvm/inputfocus.zip)
+                log "AVISO: falta $item (jar dexeado del helper de asociación)."
+                log "  La asociación nativa del mouse quedará desactivada y dex.sh"
+                log "  usará el enrutador de respaldo (getevent). Para activarla:"
+                log "  construye los jars en una máquina con JDK: jvm/build.sh"
+                ;;
+            *)  fail "Falta $item en el paquete." ;;
+        esac
     fi
 done
 if [ -f "$SOURCE_DIR/native/mouse-grab.c" ]; then
@@ -119,9 +140,6 @@ if [ -f "$SOURCE_DIR/native/mouse-grab.c" ]; then
         log "Copiado native/mouse-grab.c"
     fi
 fi
-chmod +x "$INSTALL_DIR/dex.sh" "$INSTALL_DIR/scrcpy-phone.sh" \
-        "$INSTALL_DIR/watchdog.sh" "$INSTALL_DIR/start_phone.sh" \
-        "$INSTALL_DIR/update-network.sh"
 
 # --- 3b. parchear server.py + web/index.html (endpoint /api/mouse + cursor) --
 # El endpoint local /api/mouse y los tipos mdx/mbtn son parte del runtime
@@ -135,28 +153,21 @@ else
     fail "Falta tools/patch-mouse-endpoint.py en el paquete."
 fi
 
-# --- 3c. compilar el grabber EVIOCGRAB (modo sin fantasma) ------------------
-# El helper se ejecuta vía adb (shell) como usuario shell: puede hacer
-# EVIOCGRAB sobre nodos de input. Si algo falla, el enrutado del mouse cae
-# automáticamente al modo legacy (getevent) — funciona igual pero con
-# movimiento fantasma en la pantalla del teléfono; el log lo avisa.
-#
-# IMPORTANTE: SIN -static. El clang de Termux no incluye CRT estático
-# (crtbegin_static.o) ni libc.a — bionic no se distribuye estática — y el
-# enlazado estático falla SIEMPRE (verificado en S25: "cannot open
-# crtbegin_static.o" + "unable to find library -lc"). Un binario dinámico
-# normal usa el linker64 del sistema y corre como usuario shell vía adb;
-# mouse-route.py lo verifica en runtime (si no arranca, cae a legacy).
+# --- 3c. compilar el grabber EVIOCGRAB (respaldo del enrutado) ---------------
+# SIN -static: el clang de Termux no incluye CRT estático (crtbegin_static.o)
+# ni libc.a — bionic no se distribuye estática — y el enlazado estático falla
+# SIEMPRE (verificado en S25). Binario dinámico normal, verificado en runtime
+# por mouse-route.py (si no corre, cae a modo legacy).
 GRAB_BIN="$INSTALL_DIR/native/mouse-grab"
 if [ -f "$INSTALL_DIR/native/mouse-grab.c" ]; then
     if "$PREFIX/bin/clang" -O2 -o "$GRAB_BIN" "$INSTALL_DIR/native/mouse-grab.c" 2>"$PREFIX/tmp/wtm-grab-build.log"; then
-        log "native/mouse-grab compilado (modo sin movimiento fantasma activo)."
+        log "native/mouse-grab compilado (respaldo sin fantasma disponible)."
     else
         log "AVISO: no se pudo compilar mouse-grab (detalle en $PREFIX/tmp/wtm-grab-build.log)."
-        log "El enrutado del mouse usará el modo legacy: el puntero TAMBIÉN se moverá en la pantalla del teléfono."
+        log "El respaldo usará el modo legacy: el puntero TAMBIÉN se moverá en la pantalla del teléfono."
     fi
 else
-    log "AVISO: falta native/mouse-grab.c; el enrutado usará el modo legacy (con movimiento fantasma)."
+    log "AVISO: falta native/mouse-grab.c; el respaldo usará el modo legacy (con movimiento fantasma)."
 fi
 
 # --- 4. scrcpy-server oficial con checksum ---------------------------------
@@ -276,6 +287,8 @@ log "En el primer acceso, VERIFICA que la huella del certificado mostrada"
 log "en la página coincide con $FINGERPRINT ($FINGERPRINT_FILE)."
 log "Si no coincide, no introduzcas tokens y revisa la red."
 log "Verificación local: curl -sk https://127.0.0.1:$PORT/healthz"
-log "Mouse físico: modo grab (sin movimiento en la pantalla del teléfono) si el"
-log "grabber compiló y corre; si no, modo legacy con aviso en el log del enrutador."
-log "Desactiva el enrutado del mouse con MOUSE_ROUTE=0 en server.env."
+log "Mouse físico: vía principal = ASOCIACIÓN NATIVA (route-input.sh; sin"
+log "fantasma, cursor Samsung real). Respaldo = mouse-route.py (getevent)."
+log "Si la asociación nativa no arranca, revisa si jvm/inputassoc.zip y"
+log "jvm/inputfocus.zip están presentes (jvm/build.sh en una máquina con JDK)."
+log "Desactiva todo el enrutado del mouse con MOUSE_ROUTE=0 en server.env."
