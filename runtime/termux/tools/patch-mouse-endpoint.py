@@ -20,8 +20,10 @@ import py_compile
 import sys
 
 ROUTE_OLD = '''    app.router.add_post("/api/control", api_control_handler)
+    app.router.add_post("/log", log_handler)
     app.on_startup.append(on_startup)'''
 ROUTE_NEW = '''    app.router.add_post("/api/control", api_control_handler)
+    app.router.add_post("/log", log_handler)
     app.router.add_post("/api/mouse", api_mouse_handler)
     app.on_startup.append(on_startup)'''
 
