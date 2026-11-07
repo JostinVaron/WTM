@@ -38,6 +38,22 @@ is_termux(){ [ -d "$PREFIX/usr" ] && [ -x "$PREFIX/bin/pkg" ] && [ -d "$HOME_DIR
 is_termux || fail "Este instalador debe ejecutarse en Termux en el teléfono fuente."
 [ -d "$SOURCE_DIR/web" ] || fail "No se encontró web/ junto a install.sh."
 
+# --- 1. dependencias (ANTES de detectar la IP: 'ip' viene de iproute2) ----
+# Nota: en Termux 'openssl' son solo las librerías; el comando es 'openssl-tool'.
+for pkgname in python aiohttp openssl openssl-tool curl iproute2; do
+    if ! "$PREFIX/bin/pkg" list-installed 2>/dev/null | grep -q "^$pkgname\$"; then
+        log "Instalando dependencia: $pkgname"
+        "$PREFIX/bin/pkg" install -y "$pkgname" >/dev/null || fail "No se pudo instalar $pkgname."
+    fi
+done
+command -v "$PREFIX/bin/python3" >/dev/null 2>&1 || fail "python3 no está disponible."
+if ! "$PREFIX/bin/python3" -c 'import aiohttp' >/dev/null 2>&1; then
+    log "Instalando aiohttp $AIOHTTP_PIN con pip (versión fijada)."
+    "$PREFIX/bin/pip" install "aiohttp==${AIOHTTP_PIN}" >/dev/null 2>&1 || "$PREFIX/bin/pip3" install "aiohttp==${AIOHTTP_PIN}" || \
+        fail "No se pudo instalar aiohttp $AIOHTTP_PIN."
+fi
+
+# --- 2. IP autorizada ------------------------------------------------------
 if [ -n "${WTM_ALLOWED_HOSTS:-}" ]; then
     ALLOWED_HOSTS="$WTM_ALLOWED_HOSTS"
 else
@@ -51,21 +67,7 @@ if [ -z "$BIND_HOST" ]; then
     log "El servicio escuchará solo en $BIND_HOST (para cambiarlo, define WTM_BIND_HOST)."
 fi
 
-# --- 1. dependencias -------------------------------------------------------
-for pkgname in python aiohttp openssl curl; do
-    if ! "$PREFIX/bin/pkg" list-installed 2>/dev/null | grep -q "^$pkgname\$"; then
-        log "Instalando dependencia: $pkgname"
-        "$PREFIX/bin/pkg" install -y "$pkgname" >/dev/null || fail "No se pudo instalar $pkgname."
-    fi
-done
-command -v "$PREFIX/bin/python3" >/dev/null 2>&1 || fail "python3 no está disponible."
-if ! "$PREFIX/bin/python3" -c 'import aiohttp' >/dev/null 2>&1; then
-    log "Instalando aiohttp $AIOHTTP_PIN con pip (versión fijada)."
-    "$PREFIX/bin/pip" install "aiohttp==${AIOHTTP_PIN}" >/dev/null 2>&1 || "$PREFIX/bin/pip3" install "aiohttp==${AIOHTTP_PIN}" || \
-        fail "No se pudo instalar aiohttp $AIOHTTP_PIN."
-fi
-
-# --- 2. copiar fuentes (idempotente) ---------------------------------------
+# --- 3. copiar fuentes (idempotente) ---------------------------------------
 mkdir -p "$INSTALL_DIR/web" "$INSTALL_DIR/jvm"
 for item in server.py dex.sh scrcpy-phone.sh watchdog.sh find-adb-port.py start_phone.sh update-network.sh; do
     [ -f "$SOURCE_DIR/$item" ] || fail "Falta $item en el paquete."
@@ -85,7 +87,7 @@ chmod +x "$INSTALL_DIR/dex.sh" "$INSTALL_DIR/scrcpy-phone.sh" \
         "$INSTALL_DIR/watchdog.sh" "$INSTALL_DIR/start_phone.sh" \
         "$INSTALL_DIR/update-network.sh"
 
-# --- 3. scrcpy-server oficial con checksum ---------------------------------
+# --- 4. scrcpy-server oficial con checksum ---------------------------------
 JAR="$INSTALL_DIR/jvm/scrcpy-server"
 if [ -f "$JAR" ]; then
     CURRENT="$("$PREFIX/bin/python3" - <<'PY'
@@ -109,7 +111,7 @@ else
     log "scrcpy-server verificado (SHA-256 ok)."
 fi
 
-# --- 4. credenciales por instalación (nunca se sobrescriben) ---------------
+# --- 5. credenciales por instalación (nunca se sobrescriben) ---------------
 mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"
 AUTH_FILE="$CONFIG_DIR/auth-tokens.json"
@@ -177,7 +179,7 @@ else
     log "Se conserva $ENV_FILE existente."
 fi
 
-# --- 5. atajos de Termux:Widget y Termux:Boot ------------------------------
+# --- 6. atajos de Termux:Widget y Termux:Boot ------------------------------
 if [ -d "$HOME_DIR/.shortcuts" ]; then
     for shortcut in start-dex.sh stop-dex.sh; do
         if ! cmp -s "$SOURCE_DIR/shortcuts/$shortcut" "$HOME_DIR/.shortcuts/$shortcut" 2>/dev/null; then
@@ -200,7 +202,7 @@ else
     log "No existe .termux (instala Termux:Boot para arranque automático)."
 fi
 
-# --- 6. resumen ------------------------------------------------------------
+# --- 7. resumen ------------------------------------------------------------
 log "Instalación completa en $INSTALL_DIR."
 log "Inicia el servicio: bash $HOME_DIR/.shortcuts/start-dex.sh"
 log "Abre en la tablet: https://$ALLOWED_HOSTS:$PORT/"
