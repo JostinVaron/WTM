@@ -20,6 +20,12 @@ server.env
 *.png
 *.jpg
 *.jpeg
+# Binaries are not versioned EXCEPT the two historical dexed helpers of the
+# native mouse-association subsystem: they are build artifacts documented in
+# docs/bluetooth-mouse-routing.md (§5), deliberately committed and pinned by
+# SHA-256 in the commit that added them (3552194). They must stay tracked.
+!runtime/termux/jvm/inputassoc.zip
+!runtime/termux/jvm/inputfocus.zip
 *.zip
 *.jar
 *.apk
