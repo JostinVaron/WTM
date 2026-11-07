@@ -104,16 +104,22 @@ printf '%s\n' "$SCRCPY_PID" >"$PREFIX/tmp/rd-scrcpy.pid"
 
 # --- 5. poblar el display virtual (bug #8) ----------------------------------
 # Un display virtual recién creado arranca NEGRO hasta que algo se renderiza en
-# él: ni Samsung One UI ni Android lanzan el launcher ahí automáticamente.
-# Enviamos el HOME al display que scrcpy acaba de crear para que el "escritorio"
-# aparezca solo. Solo se hace cuando acabamos de crear el display (server nuevo).
-# Nota: apps con FLAG_SECURE (bancos, Netflix) renderizan negro por diseño.
+# él. Se intenta lanzar el HOME al display nuevo; PERO en Samsung One UI el
+# launcher (com.sec.android.app.launcher) rechaza arrancar en un display virtual
+# desde shell: "SecurityException: Permission Denial ... launchDisplayId=N".
+# Si HOME falla, se lanza Ajustes (actividad exportada, arranca sin problema)
+# para poblar el display. Apps con FLAG_SECURE (bancos, Netflix) renderizan
+# negro por diseño y no se pueden capturar.
 if [ -n "${NEW_DISPLAY:-}" ]; then
   VD_ID=$("$ADB" -s "$PHONE" shell "dumpsys display" 2>/dev/null | grep -oE 'mDisplayId=[0-9]+' | sort -u | grep -v 'mDisplayId=0' | head -1 | grep -oE '[0-9]+' || true)
   if [ -n "$VD_ID" ]; then
-    log "lanzando HOME en el display virtual ${VD_ID}..."
-    "$ADB" -s "$PHONE" shell "am start --display ${VD_ID} -a android.intent.action.MAIN -c android.intent.category.HOME" \
-      >/dev/null 2>&1 || log "el HOME no se pudo lanzar en el display ${VD_ID}; lanza una app manualmente."
+    if "$ADB" -s "$PHONE" shell "am start --display ${VD_ID} -a android.intent.action.MAIN -c android.intent.category.HOME" >/dev/null 2>&1; then
+      log "HOME lanzado en el display virtual ${VD_ID}."
+    else
+      log "el launcher del fabricante bloquea HOME en displays virtuales; lanzando Ajustes como contenido inicial (${VD_ID})."
+      "$ADB" -s "$PHONE" shell "am start --display ${VD_ID} -n com.android.settings/.Settings" \
+        >/dev/null 2>&1 || log "no se pudo poblar el display ${VD_ID}; lanza una app con: adb shell am start --display ${VD_ID} -n <paquete>/<actividad>"
+    fi
   else
     log "no se detectó el id del display virtual; lanza una app manualmente."
   fi
