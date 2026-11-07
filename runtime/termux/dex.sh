@@ -23,9 +23,10 @@ ADB="$PREFIX/bin/adb"
 NEW_DISPLAY="${NEW_DISPLAY:-2000x1200/240}"
 PORT="${PORT:-8443}"
 LOG="$PREFIX/tmp/rd-bridge.log"
-# Enrutado del mouse FÍSICO Bluetooth del teléfono: 1 = activo por defecto
-# (al iniciar el DeX, el mouse controla el display virtual; al detener,
-# stop-dex.sh lo mata y el mouse vuelve a la pantalla física).
+# Enrutado del mouse FÍSICO Bluetooth del teléfono: 1 = activo por defecto.
+# Vía principal: ASOCIACIÓN NATIVA (route-input.sh, APIs ocultas de
+# InputManager): el mouse controla SOLO el display virtual (sin fantasma en
+# la pantalla del teléfono). Respaldo: mouse-route.py (getevent -> bridge).
 MOUSE_ROUTE="${MOUSE_ROUTE:-1}"
 
 log(){ printf '[dex] %s %s\n' "$(date '+%F %T')" "$*"; }
@@ -129,23 +130,74 @@ IP=$("$ADB" -s "$PHONE" shell "ip -4 addr show wlan0 2>/dev/null | grep -oE 'ine
 [ -z "$IP" ] && IP=$("$ADB" -s "$PHONE" shell "ip -4 addr show swlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print \$2}'" 2>/dev/null | tr -d '\r')
 log "LISTO: bridge y scrcpy activos. Tablet: https://${IP:-<IP>}:$PORT/#auto"
 
-# Enrutador del mouse FÍSICO Bluetooth del teléfono: al iniciar el DeX, los
-# movimientos/clics del mouse se inyectan al display virtual (el cursor se ve
-# en la tablet). stop-dex.sh lo mata (pidfile rd-mouse-route.pid) y el mouse
-# vuelve a la pantalla física. Sin root los eventos no se pueden "consumir":
-# mientras el DeX esté activo el puntero también se moverá en la pantalla del
-# teléfono (inofensivo). Si no hay mouse conectado, el enrutador espera a que
-# lo enciendas. MOUSE_ROUTE=0 en server.env desactiva esta parte.
-if [ "$MOUSE_ROUTE" = "1" ] && [ -f "$PWD/mouse-route.py" ]; then
+# --- Enrutado del mouse FÍSICO Bluetooth --------------------------------------
+# VÍA PRINCIPAL — asociación NATIVA (subsystem histórico restaurado,
+# docs/bluetooth-mouse-routing.md): route-input.sh usa las APIs ocultas de
+# InputManager vía app_process para que Android mismo reasigne los mouses
+# Bluetooth al display virtual. Efectos: SIN movimiento fantasma en la
+# pantalla del teléfono, cursor Samsung REAL dentro del DeX (viaja por el
+# stream de video), cero pasos manuales. La asociación es por-display y debe
+# re-aplicarse en cada arranque (esto ya ocurre aquí) — igual que hacía el
+# start-all.sh histórico, se reintenta hasta 10 veces tolerando fallo
+# (cuando scrcpy tarda en registrar el display en dumpsys).
+# Si no puede aplicarse (jars ausentes, API oculta ausente, sin mouse),
+# cae al RESPALDO: mouse-route.py (getevent -> bridge -> scrcpy).
+if [ "$MOUSE_ROUTE" != "1" ]; then
+    log "MOUSE_ROUTE distinto de 1; el mouse físico seguirá solo en la pantalla del teléfono."
+    exit 0
+fi
+
+if [ -x "$PWD/route-input.sh" ]; then
+    associated=0
+    for attempt in $(seq 1 10); do
+        if out=$(MOUSE_DESCRIPTOR="${MOUSE_DESCRIPTOR:-}" "$PWD/route-input.sh" 2>&1); then
+            printf '%s\n' "$out" | sed 's/^/[dex] /'
+            log "asociación nativa del mouse aplicada (intento $attempt)."
+            associated=1
+            break
+        fi
+        rc=$?
+        case "$rc" in
+            4)  # sin mouse detectado: esperar y reintentar (puede estar apagado)
+                sleep 1
+                ;;
+            5)  # display virtual aún no registrado por dumpsys: reintentar
+                sleep 1
+                ;;
+            3)  # API oculta ausente: no reintentar, ir al respaldo
+                printf '%s\n' "$out" | sed 's/^/[dex] /'
+                log "API oculta de asociación ausente; se usará el enrutador de respaldo."
+                break
+                ;;
+            6)  # jars no construidos: no reintentar, ir al respaldo
+                printf '%s\n' "$out" | sed 's/^/[dex] /'
+                log "jars de asociación ausentes; se usará el enrutador de respaldo."
+                break
+                ;;
+            *)  # otro error: reintentar unas veces y luego respaldo
+                printf '%s\n' "$out" | sed 's/^/[dex] /'
+                [ "$attempt" -lt 10 ] && sleep 1
+                ;;
+        esac
+    done
+    if [ "$associated" = "1" ]; then
+        exit 0
+    fi
+else
+    log "route-input.sh no presente; se usará el enrutador de respaldo."
+fi
+
+# RESPALDO — mouse-route.py: lee el mouse con getevent y lo reenvía al
+# bridge (PATCH /api/mouse), que lo inyecta al display virtual. Modo GRAB
+# (EVIOCGRAB) si el grabber compiló: cero fantasma. LEGACY si no.
+if [ -f "$PWD/mouse-route.py" ]; then
     if [ -r "$TMPDIR/rd-mouse-route.pid" ] && kill -0 "$(tr -cd '0-9' <"$TMPDIR/rd-mouse-route.pid" 2>/dev/null)" 2>/dev/null; then
         log "enrutador de mouse ya estaba activo; no se duplica."
     else
         nohup "$PREFIX/bin/python3" "$PWD/mouse-route.py" >>"$TMPDIR/rd-mouse.log" 2>&1 &
         echo "$!" >"$TMPDIR/rd-mouse-route.pid"
-        log "enrutador de mouse físico iniciado (log: $TMPDIR/rd-mouse.log)."
+        log "enrutador de respaldo iniciado (log: $TMPDIR/rd-mouse.log)."
     fi
-elif [ "$MOUSE_ROUTE" != "1" ]; then
-    log "MOUSE_ROUTE distinto de 1; el mouse físico seguirá solo en la pantalla del teléfono."
 else
     log "mouse-route.py no presente; el mouse físico seguirá solo en la pantalla del teléfono."
 fi
