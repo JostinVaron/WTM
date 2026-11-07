@@ -71,8 +71,11 @@ mkdir -p "$TMPDIR"
 rm -f "$TMPDIR/rd-dex-stopped"
 PHONE=$(find_phone || true)
 if [ -z "$PHONE" ]; then
-    for port in $(python3 find-adb-port.py 2>/dev/null || true); do
-        "$ADB" connect "127.0.0.1:$port" >/dev/null 2>&1 || continue
+    # Android moderno: el adbd de depuración inalámbrica NO escucha en
+    # 127.0.0.1 sino en la IP de la red Wi-Fi. find-adb-port.py escanea varios
+    # hosts candidatos y ahora imprime "host:port" por cada adbd hallado.
+    for entry in $(python3 find-adb-port.py 2>/dev/null || true); do
+        "$ADB" connect "$entry" >/dev/null 2>&1 || continue
         PHONE=$(find_phone || true)
         [ -n "$PHONE" ] && break
     done
