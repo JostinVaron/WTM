@@ -25,6 +25,11 @@ is packaged or installed by a single installer.
 | Termux:API Android companion app | Not installed on the observed S25 | Required by Android for API plug-in actions such as toast; without it those actions are unavailable |
 | Bluetooth mouse association helper | Experimental Java/app_process helper in active scripts | Optional routing of a paired physical mouse; device-descriptor- and Android-version-dependent, not a video dependency |
 
+The historical implementation of this helper is documented in
+[docs/bluetooth-mouse-routing.md](bluetooth-mouse-routing.md) (mechanism,
+orchestration, dependencies, removal rationale, reimplementation guidance).
+The helper sources are not published in this repository.
+
 Termux:Widget and Termux:Boot Android apps were present on the observed S25. The optional
 Termux:API companion Android app was not present even though the Termux command package
 was installed.

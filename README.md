@@ -71,6 +71,7 @@ is not used for video.
 - [Performance measurements and acceptance criteria](docs/performance.md)
 - [Current Termux deployment and reproduction guide](docs/deployment-termux.md)
 - [Runtime release candidate](docs/runtime-release-candidate.md)
+- [Bluetooth mouse routing (historical subsystem)](docs/bluetooth-mouse-routing.md)
 - [Certification and tests](docs/certification.md)
 - [Threat model](docs/threat-model.md)
 - [Releases and packages](docs/releases.md)

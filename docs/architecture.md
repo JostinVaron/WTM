@@ -96,7 +96,9 @@ An optional helper also associates a paired Bluetooth mouse with the virtual dis
 using Android input-manager internals. This is a separate pointer-input feature; it does
 not carry the video stream and is not required for touch input sent from the tablet.
 The helper depends on device-specific input descriptors and Android hidden APIs, so it
-must be treated as experimental.
+must be treated as experimental. The full technical documentation of this removed
+subsystem (mechanism, recovered sources, removal rationale, reimplementation guidance)
+is in [bluetooth-mouse-routing.md](bluetooth-mouse-routing.md).
 
 ## Lifecycle and failure boundaries
 
