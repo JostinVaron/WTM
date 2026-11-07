@@ -12,6 +12,13 @@
 # fantasma en la pantalla del teléfono y con el cursor Samsung REAL dentro del
 # DeX (viaja por el stream de video; no es un SVG del navegador).
 #
+# NOTA de compatibilidad: los DOS formatos de salida son válidos —
+#   jar histórico:     "OK <método>(...)"        (el de la instalación original)
+#   helper reconstruido: "ASSOC_OK ..." / "FOCUS_OK ..."  (jvm/*.java)
+# Ambos se aceptan como éxito (hallado en la prueba real del S25: el jar
+# histórico imprimía "OK addUniqueId..." y se marcaba como fallo aunque la
+# asociación SÍ había aplicado).
+#
 # Descriptor: descubrimiento DINÁMICO (guía de reimplementación §7, nunca
 # hardcodeado): nodos tipo mouse detectados con getevent -lp (BTN_MOUSE +
 # REL_X + REL_Y) y el Descriptor de cada nodo leído del Event Hub State de
@@ -70,15 +77,24 @@ if [ -z "$UNIQUE_ID" ]; then
     # variante con comillas dobles (según versión de Android)
     UNIQUE_ID=$(printf '%s' "$DUMPD" | grep -oE 'uniqueId="virtual:[^"]*' | sed 's/uniqueId="//' | grep -i scrcpy | head -n 1)
 fi
-DISPLAY_ID=$(printf '%s' "$DUMPD" | grep -E 'type=VIRTUAL|type VIRTUAL' | head -n 1 | grep -oE 'displayId=[0-9]+|displayId [0-9]+' | grep -oE '[0-9]+' | head -n 1)
-if [ -z "$DISPLAY_ID" ]; then
-    # segunda pasada: displayId cerca de la línea del uniqueId virtual
-    DISPLAY_ID=$(printf '%s' "$DUMPD" | grep -B2 -A2 -i "uniqueId.*virtual" | grep -oE 'displayId=[0-9]+|displayId [0-9]+' | grep -oE '[0-9]+' | head -n 1)
-fi
-if [ -z "$UNIQUE_ID" ] || [ -z "$DISPLAY_ID" ]; then
-    log "no se encontró el display virtual scrcpy (uniqueId='$UNIQUE_ID' displayId='$DISPLAY_ID')."
+if [ -z "$UNIQUE_ID" ]; then
+    log "no se encontró el display virtual scrcpy."
     log "¿está el DeX iniciado? líneas relevantes de dumpsys display:"
     printf '%s' "$DUMPD" | grep -iE 'virtual|scrcpy' | head -n 10 | sed 's/^/[route-input]   /'
+    exit 5
+fi
+# El uniqueId de scrcpy TERMINA en el displayId numérico:
+#   virtual:com.android.shell,2000,scrcpy,<N>   → displayId = N
+# (verificado en el S25 real; antes se parseaba de dumpsys y salía 0).
+DISPLAY_ID="${UNIQUE_ID##*,}"
+case "$DISPLAY_ID" in
+    ''|*[!0-9]*)
+        # fallback: patrones de dumpsys (por si el formato del uniqueId cambia)
+        DISPLAY_ID=$(printf '%s' "$DUMPD" | grep -E 'type=VIRTUAL|type VIRTUAL' | head -n 1 | grep -oE 'displayId=[0-9]+|displayId [0-9]+' | grep -oE '[0-9]+' | head -n 1)
+        ;;
+esac
+if [ -z "$DISPLAY_ID" ]; then
+    log "no se pudo determinar el displayId del display virtual ($UNIQUE_ID)."
     exit 5
 fi
 log "display virtual: uniqueId=$UNIQUE_ID displayId=$DISPLAY_ID"
@@ -131,14 +147,16 @@ fi
 "$ADB" -s "$PHONE" shell "chmod 400 $R_FOCUS" >/dev/null 2>&1
 
 # --- asociar cada descriptor al display virtual -----------------------------
+# Acepta AMBOS formatos: el jar histórico imprime "OK <método>(...)" y el
+# reconstruido "ASSOC_OK ..." (bug hallado en la prueba real del S25).
 failed=0
 for DESC in $DESCRIPTORS; do
     OUT=$("$ADB" -s "$PHONE" shell "CLASSPATH=$R_ASSOC app_process / InputAssoc $DESC $UNIQUE_ID" 2>&1 | tr -d '\r')
     case "$OUT" in
-        *ASSOC_OK*)
+        *ASSOC_OK*|*"OK addUniqueId"*|*"OK Associate"*)
             log "asociado: $DESC -> $UNIQUE_ID"
             ;;
-        *ASSOC_API_MISSING*)
+        *ASSOC_API_MISSING*|*"NoSuchMethodException"*)
             log "API oculta ausente en esta versión de Android (addUniqueIdAssociationByDescriptor): $OUT"
             exit 3
             ;;
@@ -155,10 +173,10 @@ fi
 # --- fijar el icono del puntero al display virtual ---------------------------
 OUT=$("$ADB" -s "$PHONE" shell "CLASSPATH=$R_FOCUS app_process / InputFocus $DISPLAY_ID" 2>&1 | tr -d '\r')
 case "$OUT" in
-    *FOCUS_OK*)
+    *FOCUS_OK*|*"OK setDisplayId"*|*"OK getDisplayId"*)
         log "icono del puntero fijado al display $DISPLAY_ID ($OUT)"
         ;;
-    *FOCUS_API_MISSING*)
+    *FOCUS_API_MISSING*|*"NoSuchMethodException"*)
         log "AVISO: setDisplayIdForPointerIcon ausente; la asociación quedó aplicada: $OUT"
         ;;
     *)
