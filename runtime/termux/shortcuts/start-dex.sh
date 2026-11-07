@@ -8,8 +8,17 @@ export PREFIX=/data/data/com.termux/files/usr
 DEX_DIR="$HOME/dex"
 LOG="$PREFIX/tmp/rd-start.log"
 PORT="${PORT:-8443}"
-HEALTH_URL="https://${WTM_BIND_HOST:-127.0.0.1}:$PORT/healthz"
 mkdir -p "$PREFIX/tmp"
+# Cargar server.env para conocer el BIND_HOST real del bridge (bug #7):
+# sin esto, WTM_BIND_HOST quedaba vacío y el health-check apuntaba a
+# 127.0.0.1, donde el servidor endurecido no escucha → falso negativo.
+CONFIG="$HOME/.config/wtm/server.env"
+if [ -r "$CONFIG" ]; then
+    set -a
+    . "$CONFIG"
+    set +a
+fi
+HEALTH_URL="https://${WTM_BIND_HOST:-127.0.0.1}:$PORT/healthz"
 exec >>"$LOG" 2>&1
 log(){ printf '[start-dex] %s %s\n' "$(date '+%F %T')" "$*"; }
 notify(){
@@ -68,3 +77,30 @@ fi
 
 log "DeX listo; bridge y scrcpy confirmados."
 notify "DeX listo: el stream está conectado."
+
+# --- Enrutado automático del mouse físico Bluetooth del teléfono ------------
+# mouse-route.py lee los eventos del mouse emparejado con ESTE teléfono
+# (adb shell getevent) y los reenvía al display virtual a través del endpoint
+# local /api/mouse del bridge: el cursor aparece dentro del DeX (en la tablet).
+# stop-dex.sh lo detiene y el mouse vuelve a comportarse con normalidad en la
+# pantalla física del teléfono. Si el mouse está apagado, el enrutador espera
+# a que se conecte. Desactivar por completo: MOUSE_ROUTE=0 en server.env.
+if [ "${MOUSE_ROUTE:-1}" = "1" ] && [ -f "$DEX_DIR/mouse-route.py" ]; then
+    MOUSE_ROUTER_PID=""
+    if [ -r "$PREFIX/tmp/rd-mouse-route.pid" ]; then
+        MOUSE_ROUTER_PID=$(tr -cd '0-9' <"$PREFIX/tmp/rd-mouse-route.pid")
+        if [ -z "$MOUSE_ROUTER_PID" ] || ! kill -0 "$MOUSE_ROUTER_PID" 2>/dev/null; then
+            MOUSE_ROUTER_PID=""
+        fi
+    fi
+    if [ -n "$MOUSE_ROUTER_PID" ]; then
+        log "Enrutador de mouse ya activo (PID $MOUSE_ROUTER_PID)."
+    else
+        nohup "$PREFIX/bin/python3" "$DEX_DIR/mouse-route.py" \
+            >>"$PREFIX/tmp/rd-mouse-route.log" 2>&1 &
+        echo $! >"$PREFIX/tmp/rd-mouse-route.pid"
+        log "Enrutador de mouse iniciado (PID $!); el cursor del mouse BT aparecerá en el DeX."
+    fi
+else
+    log "Enrutado del mouse físico desactivado o mouse-route.py ausente (MOUSE_ROUTE=${MOUSE_ROUTE:-1})."
+fi

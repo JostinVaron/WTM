@@ -38,6 +38,8 @@ while true; do
   if phone_adb >/dev/null 2>&1; then
     if ! bridge_up; then
       log "bridge caído -> arrancando"
+      # dex.sh re-aplica la asociación nativa del mouse en cada arranque
+      # (requisito §7: la asociación es per-display y muere con scrcpy).
       ./dex.sh >>"$LOG" 2>&1
     fi
   fi

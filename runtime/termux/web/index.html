@@ -42,6 +42,7 @@ let offset = 0, bestRtt = 1e9;
 const st = { frames: 0, submitted: 0, decoded: 0, bytes: 0, dropped: 0, lat: [], dec: [], tot: [], enc: [], t0: performance.now() };
 const inflight = new Map();   // timestamp -> { arrival, srv }
 let extra = "";
+let codecLabel = "—", hwLabel = "—";
 
 function clog(m) { try { fetch("/log", { method: "POST", body: m }); } catch (e) {} }
 window.addEventListener("error", (e) => clog("JSERR " + e.message + " @" + e.lineno));
@@ -132,6 +133,8 @@ async function configure(m) {
   decoder.configure(cfg);
   reconfiguring = false;
   send({ t: "idr" });
+  codecLabel = m.codec;
+  hwLabel = cfg.hardwareAcceleration || "default";
   clog(`decoder ${m.codec} ${videoW}x${videoH} hw=${cfg.hardwareAcceleration || "default"}`);
 }
 
@@ -164,7 +167,6 @@ function draw() {
 const probe = { on: false, want: null, resolve: null, last: null, t: 0 };
 const pcv = document.createElement("canvas"); pcv.width = pcv.height = 1;
 const pctx = pcv.getContext("2d", { willReadFrequently: true });
-
 async function latencyTest(n) {
   clog("latencyTest start n=" + n);
   probe.on = true;
@@ -225,7 +227,8 @@ setInterval(() => {
   const r = { fps: st.decoded / dt, mbps: st.bytes * 8 / dt / 1e6, lat: avg(st.lat), latMax: Math.max(0, ...st.lat),
               dec: avg(st.dec), decMax: Math.max(0, ...st.dec), tot: avg(st.tot), totMax: Math.max(0, ...st.tot),
               enc: avg(st.enc), drop: st.dropped, rtt: bestRtt };
-  statusEl.textContent = `${videoW}x${videoH} ${r.fps.toFixed(0)}fps ${r.mbps.toFixed(1)}Mbps  captura→pantalla ${r.tot.toFixed(0)}ms (enc ${r.enc.toFixed(0)}, red ${r.lat.toFixed(0)}, dec ${r.dec.toFixed(0)})${extra}`;
+  const dq = decoder ? decoder.decodeQueueSize : 0;
+  statusEl.textContent = `${codecLabel} hw:${hwLabel} ${videoW}x${videoH} ${r.fps.toFixed(0)}fps ${r.mbps.toFixed(1)}Mbps  captura→pantalla ${r.tot.toFixed(0)}ms (enc ${r.enc.toFixed(0)}, red ${r.lat.toFixed(0)}, dec ${r.dec.toFixed(0)}, cola ${dq})${extra}`;
   window.__stats = r;
   if (dt >= 5) {
     clog(`STATS in=${(st.frames/dt).toFixed(1)} fps=${r.fps.toFixed(1)} mbps=${r.mbps.toFixed(2)} enc_ms=${r.enc.toFixed(1)} net_ms=${r.lat.toFixed(1)}(max ${r.latMax.toFixed(0)}) decode_ms=${r.dec.toFixed(1)}(max ${r.decMax.toFixed(0)}) TOTAL_ms=${r.tot.toFixed(1)}(max ${r.totMax.toFixed(0)}) dropped=${r.drop} rtt=${r.rtt}`);
@@ -317,18 +320,11 @@ document.getElementById("start").addEventListener("click", (e) => { e.currentTar
 document.getElementById("bFs").addEventListener("click", goFullscreen);
 document.getElementById("bKb").addEventListener("click", () => { kbd.focus(); });
 
-/* Barra de estado invisible salvo que se active con presión larga de DOS dedos. */
+/* Barra de estado: se activa/desactiva con presión larga de DOS dedos (500 ms)
+   y PERMANECE visible hasta alternarla otra vez — no se auto-oculta. */
 const bar = document.getElementById("bar");
-let barTimer = null, twoHoldTimer = null;
-function showBar(ms) {
-  bar.classList.add("on");
-  if (barTimer) clearTimeout(barTimer);
-  barTimer = setTimeout(() => bar.classList.remove("on"), ms || 4000);
-}
-function toggleBar() {
-  if (bar.classList.contains("on")) bar.classList.remove("on");
-  else showBar(4000);
-}
+let twoHoldTimer = null;
+function toggleBar() { if (bar.classList.contains("on")) bar.classList.remove("on"); else bar.classList.add("on"); }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { needKey = true; goFullscreen(); } });
 if (location.hash === "#auto") document.getElementById("start").remove();
 

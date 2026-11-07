@@ -84,6 +84,21 @@ else
     log "S25 no encontrado por ADB; se detendrá el bridge local igualmente."
 fi
 
+# --- restaurar el input nativo ANTES de matar procesos -----------------------
+# Si la sesión usó asociación nativa, devolver el icono del puntero al display
+# físico (InputFocus 0) para no dejarlo clavado a un display virtual muerto.
+# La asociación por descriptor muere con el display virtual (per-display), así
+# que no requiere des-asociación explícita; solo el icono necesita reset.
+if [ -n "$PHONE" ] && [ -f "$DEX_DIR/jvm/inputfocus.zip" ]; then
+    if "$ADB" -s "$PHONE" shell "test -f /data/local/tmp/inputfocus.jar" >/dev/null 2>&1; then
+        if out=$("$ADB" -s "$PHONE" shell "CLASSPATH=/data/local/tmp/inputfocus.jar app_process / InputFocus 0" 2>&1 | tr -d '\r'); then
+            log "icono del puntero devuelto al display físico ($out)"
+        else
+            log "AVISO: no se pudo restaurar el icono del puntero ($out)"
+        fi
+    fi
+fi
+
 BRIDGE_PIDS=""
 if [ -r "$PREFIX/tmp/rd-bridge.pid" ]; then
     pid=$(tr -cd '0-9' <"$PREFIX/tmp/rd-bridge.pid")
@@ -113,6 +128,16 @@ if [ -n "$BRIDGE_PIDS" ]; then
         log "Enviando TERM al bridge PID $pid."
         kill -TERM "$pid" 2>/dev/null || true
     done
+fi
+
+# --- detener el enrutador de respaldo ---------------------------------------
+if [ -r "$PREFIX/tmp/rd-mouse-route.pid" ]; then
+    pid=$(tr -cd '0-9' <"$PREFIX/tmp/rd-mouse-route.pid")
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        kill -TERM "$pid" 2>/dev/null || true
+        log "Enrutador de mouse detenido (PID $pid); el mouse vuelve a la pantalla del teléfono."
+    fi
+    rm -f "$PREFIX/tmp/rd-mouse-route.pid"
 fi
 
 if [ -n "$SCRCPY_PID" ] && [ -n "$PHONE" ] && remote_pid_is_scrcpy "$SCRCPY_PID"; then

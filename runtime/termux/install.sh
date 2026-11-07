@@ -2,7 +2,7 @@
 # WTM install.sh — instalador idempotente para Termux en el teléfono fuente.
 #
 # Qué hace:
-#  1. Instala las dependencias de Termux (pkg) si faltan.
+#  1. Instala las dependencias de Termux (pkg) si faltan (clang incluido).
 #  2. Copia las fuentes del paquete a la carpeta de despliegue.
 #  3. Descarga el scrcpy-server oficial v5.0.1 y verifica su SHA-256.
 #  4. Genera credenciales ÚNICAS por instalación (fuera de este repositorio):
@@ -10,6 +10,10 @@
 #       - certificado y llave TLS propias
 #       - server.env con puerto/host autorizado
 #  5. Instala los atajos de Termux:Widget y el arranque de Termux:Boot.
+#  6. Parchea server.py y web/index.html (endpoint /api/mouse + cursor en tablet).
+#  7. Compila native/mouse-grab (EVIOCGRAB: respaldo del enrutado sin fantasma).
+#  8. Copia el subsistema de ASOCIACIÓN NATIVA (route-input.sh + jvm/):
+#     la vía principal del enrutado de mouse (APIs ocultas de InputManager).
 #
 # Es idempotente: nunca sobrescribe tokens, TLS o configuración existentes.
 # No incluye secretos: todo el material sensible se crea en ~/.config/wtm.
@@ -38,22 +42,18 @@ is_termux(){ [ -d "$PREFIX/usr" ] && [ -x "$PREFIX/bin/pkg" ] && [ -d "$HOME_DIR
 is_termux || fail "Este instalador debe ejecutarse en Termux en el teléfono fuente."
 [ -d "$SOURCE_DIR/web" ] || fail "No se encontró web/ junto a install.sh."
 
-if [ -n "${WTM_ALLOWED_HOSTS:-}" ]; then
-    ALLOWED_HOSTS="$WTM_ALLOWED_HOSTS"
-else
-    ALLOWED_HOSTS="$(ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
-    [ -z "$ALLOWED_HOSTS" ] && ALLOWED_HOSTS="$(ip -4 addr show swlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
-    [ -z "$ALLOWED_HOSTS" ] && fail "No se detectó una IP LAN; define WTM_ALLOWED_HOSTS manualmente."
-fi
-log "IP autorizada para el navegador: $ALLOWED_HOSTS"
-if [ -z "$BIND_HOST" ]; then
-    BIND_HOST="$ALLOWED_HOSTS"
-    log "El servicio escuchará solo en $BIND_HOST (para cambiarlo, define WTM_BIND_HOST)."
-fi
-
 # --- 1. dependencias -------------------------------------------------------
-for pkgname in python aiohttp openssl curl; do
-    if ! "$PREFIX/bin/pkg" list-installed 2>/dev/null | grep -q "^$pkgname\$"; then
+# Nota: en Termux 'openssl' son solo las librerías; el comando es 'openssl-tool'.
+# 'aiohttp' NO existe como paquete de Termux: se instala vía pip más abajo.
+# 'clang' compila native/mouse-grab (respaldo EVIOCGRAB del enrutado).
+# iproute2 se instala por completitud, pero Android moderno restringe los sockets
+# netlink para apps normales, así que 'ip' falla con "Permission denied" en
+# teléfonos recientes; la detección de IP usa entonces el fallback de Python.
+# OJO: 'pkg list-installed' imprime "clang/stable,now 21.1.8-3" (con sufijo de
+# repo), no "clang" — el patrón debe ser "^<pkg>/" o nunca matchea y pkg
+# install corre como no-op en cada instalación.
+for pkgname in python openssl openssl-tool curl iproute2 clang; do
+    if ! "$PREFIX/bin/pkg" list-installed 2>/dev/null | grep -q "^$pkgname/"; then
         log "Instalando dependencia: $pkgname"
         "$PREFIX/bin/pkg" install -y "$pkgname" >/dev/null || fail "No se pudo instalar $pkgname."
     fi
@@ -65,15 +65,49 @@ if ! "$PREFIX/bin/python3" -c 'import aiohttp' >/dev/null 2>&1; then
         fail "No se pudo instalar aiohttp $AIOHTTP_PIN."
 fi
 
-# --- 2. copiar fuentes (idempotente) ---------------------------------------
-mkdir -p "$INSTALL_DIR/web" "$INSTALL_DIR/jvm"
-for item in server.py dex.sh scrcpy-phone.sh watchdog.sh find-adb-port.py start_phone.sh update-network.sh; do
+# --- 2. IP autorizada ------------------------------------------------------
+if [ -n "${WTM_ALLOWED_HOSTS:-}" ]; then
+    ALLOWED_HOSTS="$WTM_ALLOWED_HOSTS"
+else
+    ALLOWED_HOSTS="$(ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
+    [ -z "$ALLOWED_HOSTS" ] && ALLOWED_HOSTS="$(ip -4 addr show swlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
+    if [ -z "$ALLOWED_HOSTS" ]; then
+        # Fallback sin netlink: un socket UDP no envía paquetes, solo consulta
+        # al enrutador de Android qué IP local usaría hacia 8.8.8.8. Funciona
+        # en Android moderno donde netlink está restringido para apps.
+        # Nota: python3 -c en vez de heredoc; los heredocs dentro de $( ) dan
+        # problemas de parseo en el bash de Termux (visto en S25 real).
+        ALLOWED_HOSTS="$("$PREFIX/bin/python3" -c 'import socket
+try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("8.8.8.8", 80))
+    ip = s.getsockname()[0]
+    s.close()
+    if ip and not ip.startswith("0.") and ip != "127.0.0.1":
+        print(ip)
+except Exception:
+    pass')"
+    fi
+    [ -z "$ALLOWED_HOSTS" ] && fail "No se detectó una IP LAN; define WTM_ALLOWED_HOSTS manualmente."
+fi
+log "IP autorizada para el navegador: $ALLOWED_HOSTS"
+if [ -z "$BIND_HOST" ]; then
+    BIND_HOST="$ALLOWED_HOSTS"
+    log "El servicio escuchará solo en $BIND_HOST (para cambiarlo, define WTM_BIND_HOST)."
+fi
+
+# --- 3. copiar fuentes (idempotente) ---------------------------------------
+mkdir -p "$INSTALL_DIR/web" "$INSTALL_DIR/jvm" "$INSTALL_DIR/native"
+for item in server.py dex.sh scrcpy-phone.sh watchdog.sh find-adb-port.py start_phone.sh update-network.sh mouse-route.py route-input.sh; do
     [ -f "$SOURCE_DIR/$item" ] || fail "Falta $item en el paquete."
     if ! cmp -s "$SOURCE_DIR/$item" "$INSTALL_DIR/$item" 2>/dev/null; then
         cp "$SOURCE_DIR/$item" "$INSTALL_DIR/$item"
         log "Copiado $item"
     fi
 done
+chmod +x "$INSTALL_DIR/dex.sh" "$INSTALL_DIR/scrcpy-phone.sh" \
+        "$INSTALL_DIR/watchdog.sh" "$INSTALL_DIR/start_phone.sh" \
+        "$INSTALL_DIR/update-network.sh" "$INSTALL_DIR/route-input.sh"
 for item in index.html panel.html; do
     [ -f "$SOURCE_DIR/web/$item" ] || fail "Falta web/$item en el paquete."
     if ! cmp -s "$SOURCE_DIR/web/$item" "$INSTALL_DIR/web/$item" 2>/dev/null; then
@@ -81,21 +115,69 @@ for item in index.html panel.html; do
         log "Copiado web/$item"
     fi
 done
-chmod +x "$INSTALL_DIR/dex.sh" "$INSTALL_DIR/scrcpy-phone.sh" \
-        "$INSTALL_DIR/watchdog.sh" "$INSTALL_DIR/start_phone.sh" \
-        "$INSTALL_DIR/update-network.sh"
+# Subsistema de asociación nativa: fuentes java + build + jars dexeados
+for item in jvm/InputAssoc.java jvm/InputFocus.java jvm/build.sh jvm/inputassoc.zip jvm/inputfocus.zip; do
+    if [ -f "$SOURCE_DIR/$item" ]; then
+        if ! cmp -s "$SOURCE_DIR/$item" "$INSTALL_DIR/$item" 2>/dev/null; then
+            cp "$SOURCE_DIR/$item" "$INSTALL_DIR/$item"
+            log "Copiado $item"
+        fi
+    else
+        case "$item" in
+            jvm/inputassoc.zip|jvm/inputfocus.zip)
+                log "AVISO: falta $item (jar dexeado del helper de asociación)."
+                log "  La asociación nativa del mouse quedará desactivada y dex.sh"
+                log "  usará el enrutador de respaldo (getevent). Para activarla:"
+                log "  construye los jars en una máquina con JDK: jvm/build.sh"
+                ;;
+            *)  fail "Falta $item en el paquete." ;;
+        esac
+    fi
+done
+if [ -f "$SOURCE_DIR/native/mouse-grab.c" ]; then
+    if ! cmp -s "$SOURCE_DIR/native/mouse-grab.c" "$INSTALL_DIR/native/mouse-grab.c" 2>/dev/null; then
+        cp "$SOURCE_DIR/native/mouse-grab.c" "$INSTALL_DIR/native/mouse-grab.c"
+        log "Copiado native/mouse-grab.c"
+    fi
+fi
 
-# --- 3. scrcpy-server oficial con checksum ---------------------------------
+# --- 3b. parchear server.py + web/index.html (endpoint /api/mouse + cursor) --
+# El endpoint local /api/mouse y los tipos mdx/mbtn son parte del runtime
+# publicado; el parche es IDEMPOTENTE y con anclas exactas (falla ruidosamente
+# si el archivo no es la versión esperada; nunca rompe nada a medias).
+if [ -f "$SOURCE_DIR/tools/patch-mouse-endpoint.py" ]; then
+    "$PREFIX/bin/python3" "$SOURCE_DIR/tools/patch-mouse-endpoint.py" \
+        "$INSTALL_DIR/server.py" "$INSTALL_DIR/web/index.html" || \
+        fail "El parche del endpoint /api/mouse falló; revisa el mensaje anterior."
+else
+    fail "Falta tools/patch-mouse-endpoint.py en el paquete."
+fi
+
+# --- 3c. compilar el grabber EVIOCGRAB (respaldo del enrutado) ---------------
+# SIN -static: el clang de Termux no incluye CRT estático (crtbegin_static.o)
+# ni libc.a — bionic no se distribuye estática — y el enlazado estático falla
+# SIEMPRE (verificado en S25). Binario dinámico normal, verificado en runtime
+# por mouse-route.py (si no corre, cae a modo legacy).
+GRAB_BIN="$INSTALL_DIR/native/mouse-grab"
+if [ -f "$INSTALL_DIR/native/mouse-grab.c" ]; then
+    if "$PREFIX/bin/clang" -O2 -o "$GRAB_BIN" "$INSTALL_DIR/native/mouse-grab.c" 2>"$PREFIX/tmp/wtm-grab-build.log"; then
+        log "native/mouse-grab compilado (respaldo sin fantasma disponible)."
+    else
+        log "AVISO: no se pudo compilar mouse-grab (detalle en $PREFIX/tmp/wtm-grab-build.log)."
+        log "El respaldo usará el modo legacy: el puntero TAMBIÉN se moverá en la pantalla del teléfono."
+    fi
+else
+    log "AVISO: falta native/mouse-grab.c; el respaldo usará el modo legacy (con movimiento fantasma)."
+fi
+
+# --- 4. scrcpy-server oficial con checksum ---------------------------------
 JAR="$INSTALL_DIR/jvm/scrcpy-server"
 if [ -f "$JAR" ]; then
-    CURRENT="$("$PREFIX/bin/python3" - <<'PY'
-import hashlib, sys
+    CURRENT="$("$PREFIX/bin/python3" -c 'import hashlib, sys
 try:
     print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())
 except Exception:
-    print("unreadable")
-PY
-    "$JAR")"
+    print("unreadable")' "$JAR")"
     if [ "$CURRENT" = "$SCRCPY_SHA256" ]; then
         log "scrcpy-server v$SCRCPY_VERSION ya presente con checksum correcto."
     else
@@ -109,7 +191,7 @@ else
     log "scrcpy-server verificado (SHA-256 ok)."
 fi
 
-# --- 4. credenciales por instalación (nunca se sobrescriben) ---------------
+# --- 5. credenciales por instalación (nunca se sobrescriben) ---------------
 mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"
 AUTH_FILE="$CONFIG_DIR/auth-tokens.json"
@@ -146,12 +228,9 @@ if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
 else
     log "Se conserva el material TLS existente en $CONFIG_DIR."
 fi
-FINGERPRINT="$("$PREFIX/bin/python3" - <<'PY'
-import hashlib, sys
+FINGERPRINT="$("$PREFIX/bin/python3" -c 'import hashlib, sys
 digest = hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest().upper()
-print(":".join(digest[i:i+2] for i in range(0, 64, 2)))
-PY
-"$CERT")"
+print(":".join(digest[i:i+2] for i in range(0, 64, 2)))' "$CERT")"
 printf '%s\n' "$FINGERPRINT" >"$FINGERPRINT_FILE"
 chmod 644 "$FINGERPRINT_FILE"
 log "Huella SHA-256 del certificado: $FINGERPRINT"
@@ -177,7 +256,7 @@ else
     log "Se conserva $ENV_FILE existente."
 fi
 
-# --- 5. atajos de Termux:Widget y Termux:Boot ------------------------------
+# --- 6. atajos de Termux:Widget y Termux:Boot ------------------------------
 if [ -d "$HOME_DIR/.shortcuts" ]; then
     for shortcut in start-dex.sh stop-dex.sh; do
         if ! cmp -s "$SOURCE_DIR/shortcuts/$shortcut" "$HOME_DIR/.shortcuts/$shortcut" 2>/dev/null; then
@@ -200,7 +279,7 @@ else
     log "No existe .termux (instala Termux:Boot para arranque automático)."
 fi
 
-# --- 6. resumen ------------------------------------------------------------
+# --- 7. resumen ------------------------------------------------------------
 log "Instalación completa en $INSTALL_DIR."
 log "Inicia el servicio: bash $HOME_DIR/.shortcuts/start-dex.sh"
 log "Abre en la tablet: https://$ALLOWED_HOSTS:$PORT/"
@@ -208,3 +287,8 @@ log "En el primer acceso, VERIFICA que la huella del certificado mostrada"
 log "en la página coincide con $FINGERPRINT ($FINGERPRINT_FILE)."
 log "Si no coincide, no introduzcas tokens y revisa la red."
 log "Verificación local: curl -sk https://127.0.0.1:$PORT/healthz"
+log "Mouse físico: vía principal = ASOCIACIÓN NATIVA (route-input.sh; sin"
+log "fantasma, cursor Samsung real). Respaldo = mouse-route.py (getevent)."
+log "Si la asociación nativa no arranca, revisa si jvm/inputassoc.zip y"
+log "jvm/inputfocus.zip están presentes (jvm/build.sh en una máquina con JDK)."
+log "Desactiva todo el enrutado del mouse con MOUSE_ROUTE=0 en server.env."
