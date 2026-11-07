@@ -8,11 +8,15 @@ asociaciones input->display de /vendor/etc/input-port-associations.xml son está
 AOSP: "dynamic associations are not yet enabled"). Este enrutador lo resuelve sin
 root y sin APIs ocultas:
 
-  1. Detecta los nodos /dev/input/eventN tipo mouse via `adb shell getevent -lp`
-     (los nodos con BTN_LEFT y REL_X; los teclados y el touch no cumplen eso).
-  2. Lee sus eventos en bruto con `adb shell getevent -lt <nodo>`.
+  1. Detecta los nodos /dev/input/eventN tipo mouse via `adb shell getevent -lp`.
+     OJO con las etiquetas reales (verificado en un S25 Android 16): el botón
+     izquierdo se lista como BTN_MOUSE (getevent etiqueta el código 0x110 así;
+     BTN_LEFT no aparece), un mouse real expone BTN_MOUSE/BTN_RIGHT/BTN_MIDDLE
+     junto a REL_X/REL_Y, y su mitad "Keyboard" es un nodo separado sin REL_X.
+  2. Lee sus eventos en bruto con `adb shell getevent -lt <nodo>`
+     (valores hexadecimales de 32 bits con signo: ffffffff = -1).
   3. Los reenvía (movimiento relativo, botones, rueda) al endpoint local del
-     bridge (POST /api/mouse), que los inyecta al display virtual a traves del
+     bridge (POST /api/mouse), que los inyecta al display virtual a través del
      socket de control de scrcpy — el mismo camino que el touch de la tablet.
 
 Ciclo de vida: lo arranca dex.sh al iniciar el DeX y muere solo cuando el DeX se
@@ -27,7 +31,7 @@ Notas:
   instalador lo aplica automáticamente).
 
 Config (env o ~/.config/wtm/server.env): PORT, WTM_BIND_HOST, MOUSE_SENS,
-MOUSE_FLUSH_MS, WTM_PHONE_MODEL. Desactiva el enrutado con WTM_MOUSE_ROUTE=0.
+MOUSE_FLUSH_MS, WTM_PHONE_MODEL. Desactiva el enrutado con MOUSE_ROUTE=0.
 """
 import http.client
 import json
@@ -86,31 +90,45 @@ def find_phone(phone_model):
     return None
 
 
+# Botones que etiqueta getevent (0x110 = BTN_MOUSE = botón izquierdo en la
+# práctica; BTN_LEFT existe como alias de 0x110 pero getevent imprime BTN_MOUSE).
+MOUSE_CODES = {"BTN_MOUSE", "BTN_LEFT", "BTN_RIGHT", "BTN_MIDDLE",
+               "BTN_SIDE", "BTN_EXTRA", "BTN_FORWARD", "BTN_BACK", "BTN_TASK"}
+
+
 def find_mouse_nodes(serial):
-    """Nodos tipo mouse: bloques de getevent -lp con BTN_LEFT y REL_X (un teclado
-    Bluetooth no tiene REL_X; la pantalla táctil no tiene BTN_LEFT ni REL)."""
+    """Nodos tipo mouse: bloques de getevent -lp con un botón de mouse
+    (BTN_MOUSE/BTN_LEFT/BTN_RIGHT/...) y ejes relativos REL_X y REL_Y.
+    La mitad "Keyboard" de un combo BT no tiene REL_X; la pantalla táctil y los
+    sensores no tienen botones BTN_*; un teclado no tiene REL_X."""
     out = subprocess.run([ADB, "-s", serial, "shell", "getevent", "-lp"],
                           capture_output=True, text=True).stdout
-    nodes, node, has_btn, has_rel = [], None, False, False
+    nodes, node, has_btn, has_relx, has_rely = [], None, False, False, False
     for line in out.splitlines():
         match = re.match(r"add device.*?:\s+(/dev/input/event\d+)", line.strip())
         if match:
-            if node and has_btn and has_rel:
+            if node and has_btn and has_relx and has_rely:
                 nodes.append(node)
-            node, has_btn, has_rel = match.group(1), False, False
+            node = match.group(1)
+            has_btn = has_relx = has_rely = False
         elif node:
-            if "BTN_LEFT" in line:
-                has_btn = True
-            if "REL_X" in line:
-                has_rel = True
-    if node and has_btn and has_rel:
+            for code in MOUSE_CODES:
+                if re.search(rf"\b{code}\b", line):
+                    has_btn = True
+                    break
+            if re.search(r"\bREL_X\b", line):
+                has_relx = True
+            if re.search(r"\bREL_Y\b", line):
+                has_rely = True
+    if node and has_btn and has_relx and has_rely:
         nodes.append(node)
     return nodes
 
 
-def signed16(hexval):
+def signed32(hexval):
+    """getevent imprime valores hexadecimales de 32 bits con signo."""
     value = int(hexval, 16)
-    return value - 0x10000 if value > 0x7FFF else value
+    return value - 0x100000000 if value > 0x7FFFFFFF else value
 
 
 class Bridge:
@@ -158,7 +176,7 @@ class Router:
         self.dy = 0
         self.moves = threading.Lock()
         # convención del cliente web: 1=izquierdo, 2=central, 3=derecho
-        self.btn = {"BTN_LEFT": 1, "BTN_MIDDLE": 2, "BTN_RIGHT": 3}
+        self.btn = {"BTN_MOUSE": 1, "BTN_LEFT": 1, "BTN_MIDDLE": 2, "BTN_RIGHT": 3}
 
     def flush_moves(self):
         while True:
@@ -175,7 +193,8 @@ class Router:
     def watch_node(self, node):
         pattern = re.compile(
             r"\[\s*[\d.]+\]\s+\S+:\s+(EV_REL|EV_KEY)\s+"
-            r"(REL_X|REL_Y|REL_WHEEL|BTN_LEFT|BTN_RIGHT|BTN_MIDDLE)\s+"
+            r"(REL_X|REL_Y|REL_WHEEL|REL_HWHEEL|BTN_MOUSE|BTN_LEFT|BTN_RIGHT|BTN_MIDDLE|"
+            r"BTN_SIDE|BTN_EXTRA|BTN_FORWARD|BTN_BACK|BTN_TASK)\s+"
             r"([0-9a-fA-F]+|DOWN|UP)")
         while True:
             proc = subprocess.Popen(
@@ -188,18 +207,20 @@ class Router:
                     continue
                 kind, code, val = match.group(1), match.group(2), match.group(3)
                 if kind == "EV_REL":
-                    value = signed16(val)
                     if code == "REL_X":
                         with self.moves:
-                            self.dx += value
+                            self.dx += signed32(val)
                     elif code == "REL_Y":
                         with self.moves:
-                            self.dy += value
+                            self.dy += signed32(val)
                     elif code == "REL_WHEEL":
                         # REL_WHEEL positivo = rueda hacia arriba (AXIS_VSCROLL positivo)
                         self.bridge.post({"t": "wheel",
-                                          "d": max(-1, min(1, value)), "n": 1})
+                                          "d": max(-1, min(1, signed32(val))), "n": 1})
+                    # REL_HWHEEL (scroll horizontal) se ignora: el cliente solo inyecta scroll vertical
                 else:
+                    if code not in self.btn:      # botones laterales extra: ignorados
+                        continue
                     if val == "DOWN":
                         down = True
                     elif val == "UP":
