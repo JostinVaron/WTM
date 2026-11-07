@@ -90,7 +90,7 @@ fi
 
 # --- 3. copiar fuentes (idempotente) ---------------------------------------
 mkdir -p "$INSTALL_DIR/web" "$INSTALL_DIR/jvm"
-for item in server.py dex.sh scrcpy-phone.sh watchdog.sh find-adb-port.py start_phone.sh update-network.sh; do
+for item in server.py dex.sh scrcpy-phone.sh watchdog.sh find-adb-port.py start_phone.sh update-network.sh mouse-route.py; do
     [ -f "$SOURCE_DIR/$item" ] || fail "Falta $item en el paquete."
     if ! cmp -s "$SOURCE_DIR/$item" "$INSTALL_DIR/$item" 2>/dev/null; then
         cp "$SOURCE_DIR/$item" "$INSTALL_DIR/$item"
@@ -108,7 +108,18 @@ chmod +x "$INSTALL_DIR/dex.sh" "$INSTALL_DIR/scrcpy-phone.sh" \
         "$INSTALL_DIR/watchdog.sh" "$INSTALL_DIR/start_phone.sh" \
         "$INSTALL_DIR/update-network.sh"
 
-# --- 4. scrcpy-server oficial con checksum ---------------------------------
+# --- 4. parchear server.py con el endpoint de enrutado del mouse -----------
+# El endpoint local /api/mouse y los tipos mdx/mbtn son parte del runtime
+# publicado; el parche es IDEMPOTENTE y con anclas exactas (falla ruidosamente
+# si server.py no es la versión esperada; nunca rompe el archivo).
+if [ -f "$SOURCE_DIR/tools/patch-mouse-endpoint.py" ]; then
+    "$PREFIX/bin/python3" "$SOURCE_DIR/tools/patch-mouse-endpoint.py" "$INSTALL_DIR/server.py" || \
+        fail "El parche del endpoint /api/mouse falló; revisa el mensaje anterior."
+else
+    fail "Falta tools/patch-mouse-endpoint.py en el paquete."
+fi
+
+# --- 5. scrcpy-server oficial con checksum ---------------------------------
 JAR="$INSTALL_DIR/jvm/scrcpy-server"
 if [ -f "$JAR" ]; then
     CURRENT="$("$PREFIX/bin/python3" -c 'import hashlib, sys
@@ -129,7 +140,7 @@ else
     log "scrcpy-server verificado (SHA-256 ok)."
 fi
 
-# --- 5. credenciales por instalación (nunca se sobrescriben) ---------------
+# --- 6. credenciales por instalación (nunca se sobrescriben) ---------------
 mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"
 AUTH_FILE="$CONFIG_DIR/auth-tokens.json"
@@ -143,7 +154,7 @@ with open(path, "w", encoding="utf-8") as handle:
     json.dump({"viewer": viewer, "admin": admin}, handle, indent=2)
 os.chmod(path, 0o600)
 print("token viewer:", viewer)
-print("token admin :", admin)
+print("token admin : ", admin)
 PY
     log "Tokens generados (guardados en $AUTH_FILE, permisos 600)."
     log "Guarda el token admin en un lugar seguro ANTES de continuar."
@@ -194,7 +205,7 @@ else
     log "Se conserva $ENV_FILE existente."
 fi
 
-# --- 6. atajos de Termux:Widget y Termux:Boot ------------------------------
+# --- 7. atajos de Termux:Widget y Termux:Boot ------------------------------
 if [ -d "$HOME_DIR/.shortcuts" ]; then
     for shortcut in start-dex.sh stop-dex.sh; do
         if ! cmp -s "$SOURCE_DIR/shortcuts/$shortcut" "$HOME_DIR/.shortcuts/$shortcut" 2>/dev/null; then
@@ -217,7 +228,7 @@ else
     log "No existe .termux (instala Termux:Boot para arranque automático)."
 fi
 
-# --- 7. resumen ------------------------------------------------------------
+# --- 8. resumen ------------------------------------------------------------
 log "Instalación completa en $INSTALL_DIR."
 log "Inicia el servicio: bash $HOME_DIR/.shortcuts/start-dex.sh"
 log "Abre en la tablet: https://$ALLOWED_HOSTS:$PORT/"
@@ -225,3 +236,5 @@ log "En el primer acceso, VERIFICA que la huella del certificado mostrada"
 log "en la página coincide con $FINGERPRINT ($FINGERPRINT_FILE)."
 log "Si no coincide, no introduzcas tokens y revisa la red."
 log "Verificación local: curl -sk https://127.0.0.1:$PORT/healthz"
+log "El mouse físico Bluetooth del teléfono se enruta al DeX al iniciar (MOUSE_ROUTE=1);"
+log "con MOUSE_ROUTE=0 en server.env se desactiva el enrutado."
