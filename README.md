@@ -34,10 +34,15 @@ events travel in the reverse direction.
   forced hardware path in the observed A/B test. The browser defaults to software.
 - Touch/input forwarding and the virtual-display pipeline have been used on this pair,
   but there is no formal compatibility or long-duration reliability certification.
+- Bluetooth mouse routing to the virtual display has been restored and verified working
+  on this pair (2026-11-07): the phone's paired physical mouse drives the virtual
+  display only — no ghost input on the phone screen, with the real Samsung cursor.
+  See [bluetooth-mouse-routing.md](docs/bluetooth-mouse-routing.md).
 
 Measurements are conditional on scene complexity, Wi-Fi, device temperature, foreground
 state, browser behavior, and battery/thermal management. See
-[Performance and test evidence](docs/performance.md).
+[Performance and test evidence](docs/performance.md) and the
+[optimization backlog](docs/optimization.md).
 
 ## Architecture at a glance
 
@@ -69,8 +74,10 @@ is not used for video.
 - [Dependencies and installation inventory](docs/dependencies.md)
 - [Hardware, operating-system, and network requirements](docs/requirements.md)
 - [Performance measurements and acceptance criteria](docs/performance.md)
+- [Performance and optimization backlog](docs/optimization.md)
 - [Current Termux deployment and reproduction guide](docs/deployment-termux.md)
 - [Runtime release candidate](docs/runtime-release-candidate.md)
+- [Bluetooth mouse routing (historical subsystem)](docs/bluetooth-mouse-routing.md)
 - [Certification and tests](docs/certification.md)
 - [Threat model](docs/threat-model.md)
 - [Releases and packages](docs/releases.md)
@@ -122,22 +129,24 @@ is not used for video.
    In addition, the One UI Recents/task-switcher does not work on virtual displays: the
    recents view opens on the default display and appears empty, so task switching must
    use a keyboard task-switcher shortcut or relaunching apps.
-8. **Pointer input from the tablet is touch-and-injection; the phone-paired physical
-   mouse can be routed into the virtual display by the runtime.** Touch on the tablet
-   streams touch events through the browser session into the scrcpy control socket,
-   which keeps the phone-like touch feel; pointer events (mouse paired to the tablet,
-   or touchpad) are injected with `POINTER_ID_MOUSE` and show a cursor in the virtual
-   display. In addition, the runtime ships `mouse-route.py`: when the DeX session
-   starts, it reads the raw events of a Bluetooth mouse paired with the **phone**
-   (`adb shell getevent`, no root) and re-injects them into the virtual display via a
-   machine-local endpoint (`/api/mouse`, loopback-only, rate-limited), so the phone's
-   own mouse cursor appears inside the DeX with no extra user steps; when the session
-   stops, the router is stopped too and the mouse behaves normally on the phone's
-   physical screen. Disable with `MOUSE_ROUTE=0` in `server.env`. Without root, the
-   events cannot be exclusively consumed, so the pointer may also still move on the
-   phone's physical screen; the association APIs that would make it exclusive
-   (`ASSOCIATE_INPUT_DEVICE_TO_DISPLAY`, Android 15+) are available only to
-   system-level clients, so an exclusive route is not implemented.
+8. **Tablet input is touch-and-injection; the phone-paired physical mouse is routed
+   natively when available.** Touch on the tablet streams touch events through the
+   browser session into the scrcpy control socket; pointer events (mouse paired to the
+   tablet, or touchpad) are injected with `POINTER_ID_MOUSE` and show a cursor in the
+   virtual display. For a Bluetooth mouse paired with the **phone**, the runtime's
+   primary path is the native input-device association
+   (`route-input.sh` + `jvm/InputAssoc`/`InputFocus` via `app_process`, calling the
+   Android 14+ hidden `IInputManager.addUniqueIdAssociationByDescriptor` /
+   `setDisplayIdForPointerIcon`): Android itself re-targets the mouse to the virtual
+   display, so there is no ghost input on the phone screen and the real system cursor
+   renders inside the DeX. This was verified working on the S25 on 2026-11-07; it uses
+   hidden APIs and must be re-applied on every session start (the runtime does this
+   automatically). If the association cannot be applied (jars missing or the API
+   absent on an Android update), the runtime falls back to `mouse-route.py`
+   (`getevent` → machine-local `/api/mouse` endpoint → injection), which works but
+   without exclusivity: the pointer may also move on the phone's physical screen.
+   Disable all mouse routing with `MOUSE_ROUTE=0` in `server.env`. See
+   [bluetooth-mouse-routing.md](docs/bluetooth-mouse-routing.md).
 
 ## Hardware requirements: what we can and cannot claim
 
