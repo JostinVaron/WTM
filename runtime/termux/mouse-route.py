@@ -1,46 +1,50 @@
 #!/usr/bin/env python3
 """
-mouse-route.py — enruta el mouse Bluetooth físico del teléfono al display virtual del DeX.
+mouse-route.py — enruta el mouse Bluetooth físico del teléfono al display
+virtual del DeX SIN movimiento fantasma en la pantalla del teléfono.
 
-Android dirige los periféricos emparejados con el teléfono hacia su pantalla física
-y no existe ningún comando para asociarlos dinámicamente a un display virtual (las
-asociaciones input->display de /vendor/etc/input-port-associations.xml son estáticas;
-AOSP: "dynamic associations are not yet enabled"). Este enrutador lo resuelve sin
-root y sin APIs ocultas:
+Dos modos:
 
-  1. Detecta los nodos /dev/input/eventN tipo mouse via `adb shell getevent -lp`.
-     OJO con las etiquetas reales (verificado en un S25 Android 16): el botón
-     izquierdo se lista como BTN_MOUSE (getevent etiqueta el código 0x110 así;
-     BTN_LEFT no aparece), un mouse real expone BTN_MOUSE/BTN_RIGHT/BTN_MIDDLE
-     junto a REL_X/REL_Y, y su mitad "Keyboard" es un nodo separado sin REL_X.
-  2. Lee sus eventos en bruto con `adb shell getevent -lt <nodo>`. Formato real
-     en vivo (verificado): la línea NO lleva nombre de dispositivo —
-       "[   73280.294576] EV_REL       REL_X                00000027"
-     (timestamp entre corchetes, tipo EV_*, código, valor hex de 32 bits con
-     signo: fffffffa = -6).
-  3. Los reenvía (movimiento relativo, botones, rueda) al endpoint local del
-     bridge (POST /api/mouse), que los inyecta al display virtual a través del
-     socket de control de scrcpy — el mismo camino que el touch de la tablet.
+  GRAB (por defecto): ejecuta native/mouse-grab vía adb shell. Ese helper hace
+  EVIOCGRAB sobre el nodo /dev/input/eventN del mouse: el kernel entrega los
+  eventos EN EXCLUSIVA al enrutador — Android deja de verlos, así que el
+  puntero del S25 NO se mueve, no hay clics perdidos en el teléfono y la
+  pantalla no despierta sola. Al detenerse el DeX, el grab se libera solo y
+  el mouse vuelve a su comportamiento normal automáticamente.
 
-Ciclo de vida: lo arranca dex.sh al iniciar el DeX y muere solo cuando el DeX se
-detiene (detecta la marca rd-dex-stopped que escribe stop-dex.sh). No requiere
-pasos manuales: si el mouse está apagado, espera y arranca cuando lo enciendas.
+  LEGACY (fallback): `adb shell getevent -lt` COPIA los eventos sin
+  consumirlos; en este modo el puntero TAMBIÉN se mueve en la pantalla física
+  del teléfono (fantasma). Solo se usa si EVIOCGRAB es denegado por el
+  dispositivo, y el log lo avisa claramente.
 
-Notas:
-- Los eventos NO se consumen: el puntero también se moverá en la pantalla física
-  del teléfono (inofensivo e inevitable sin root). Al detenerse el enrutador,
-  el mouse vuelve a su comportamiento normal sin intervención.
-- El bridge debe tener el endpoint /api/mouse (tools/patch-mouse-endpoint.py; el
-  instalador lo aplica automáticamente).
+Formatos verificados en un S25 Android 16 (S931B):
+  - getevent -lp etiqueta el botón izquierdo como BTN_MOUSE (no BTN_LEFT).
+  - Un mouse real expone BTN_MOUSE/BTN_RIGHT/BTN_MIDDLE junto a REL_X/REL_Y;
+    su mitad "Keyboard" de un combo BT es un nodo separado sin REL_X.
+  - getevent -lt imprime valores hex de 32 bits con signo (ffffffff = -1) y
+    la línea NO lleva nombre de dispositivo:
+      "[   73280.294576] EV_REL       REL_X                00000027"
+  - El grabber emite registros binarios canónicos de 8 bytes (type/code/value),
+    sin ambigüedad de texto; heartbeat con type=0xFFFF.
+
+Ciclo de vida: lo arranca dex.sh al iniciar el DeX y muere solo cuando el DeX
+se detiene (marca rd-dex-stopped que escribe stop-dex.sh). Si el mouse está
+apagado, espera y arranca cuando lo enciendas.
+
+El bridge debe tener el endpoint /api/mouse (tools/patch-mouse-endpoint.py;
+el instalador lo aplica automáticamente).
 
 Config (env o ~/.config/wtm/server.env): PORT, WTM_BIND_HOST, MOUSE_SENS,
 MOUSE_FLUSH_MS, WTM_PHONE_MODEL. Desactiva el enrutado con MOUSE_ROUTE=0.
 """
+import atexit
 import http.client
 import json
 import os
 import re
+import signal
 import ssl
+import struct
 import subprocess
 import sys
 import threading
@@ -50,6 +54,15 @@ PREFIX = "/data/data/com.termux/files/usr"
 ADB = f"{PREFIX}/bin/adb"
 STOP_FLAG = f"{PREFIX}/tmp/rd-dex-stopped"
 PID_FILE = f"{PREFIX}/tmp/rd-mouse-route.pid"
+HERE = os.path.dirname(os.path.abspath(__file__))
+GRAB_LOCAL = os.path.join(HERE, "native", "mouse-grab")
+GRAB_REMOTE = "/data/local/tmp/wtm-mouse-grab"
+
+# Códigos del kernel para el modo GRAB (registros binarios del grabber).
+EV_KEY, EV_REL = 1, 2
+REL_X, REL_Y, REL_WHEEL = 0, 1, 8
+BTN_MOUSE, BTN_RIGHT, BTN_MIDDLE = 272, 273, 274   # 0x110, 0x111, 0x112
+GRAB_BTN_TO_WEB = {BTN_MOUSE: 1, BTN_MIDDLE: 2, BTN_RIGHT: 3}  # 1=izq 2=central 3=der
 
 
 def log(msg):
@@ -93,17 +106,13 @@ def find_phone(phone_model):
     return None
 
 
-# Botones que etiqueta getevent (0x110 = BTN_MOUSE = botón izquierdo en la
-# práctica; BTN_LEFT existe como alias de 0x110 pero getevent imprime BTN_MOUSE).
 MOUSE_CODES = {"BTN_MOUSE", "BTN_LEFT", "BTN_RIGHT", "BTN_MIDDLE",
                "BTN_SIDE", "BTN_EXTRA", "BTN_FORWARD", "BTN_BACK", "BTN_TASK"}
 
 
 def find_mouse_nodes(serial):
     """Nodos tipo mouse: bloques de getevent -lp con un botón de mouse
-    (BTN_MOUSE/BTN_LEFT/BTN_RIGHT/...) y ejes relativos REL_X y REL_Y.
-    La mitad "Keyboard" de un combo BT no tiene REL_X; la pantalla táctil y los
-    sensores no tienen botones BTN_*; un teclado no tiene REL_X."""
+    (BTN_MOUSE/BTN_LEFT/BTN_RIGHT/...) y ejes relativos REL_X y REL_Y."""
     out = subprocess.run([ADB, "-s", serial, "shell", "getevent", "-lp"],
                           capture_output=True, text=True).stdout
     nodes, node, has_btn, has_relx, has_rely = [], None, False, False, False
@@ -128,8 +137,23 @@ def find_mouse_nodes(serial):
     return nodes
 
 
+def push_grabber(serial):
+    """Sube el helper compilado al teléfono (via /data/local/tmp)."""
+    if not os.path.isfile(GRAB_LOCAL):
+        log(f"no hay grabber compilado ({GRAB_LOCAL}); se usará el modo legacy")
+        return False
+    result = subprocess.run([ADB, "-s", serial, "push", GRAB_LOCAL, GRAB_REMOTE],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        log(f"no se pudo subir el grabber: {result.stderr.strip()}")
+        return False
+    subprocess.run([ADB, "-s", serial, "shell", "chmod", "755", GRAB_REMOTE],
+                    capture_output=True)
+    return True
+
+
 def signed32(hexval):
-    """getevent imprime valores hexadecimales de 32 bits con signo."""
+    """getevent imprime valores hexadecimales de 32 bits con signo (legacy)."""
     value = int(hexval, 16)
     return value - 0x100000000 if value > 0x7FFFFFFF else value
 
@@ -178,8 +202,15 @@ class Router:
         self.dx = 0
         self.dy = 0
         self.moves = threading.Lock()
+        self.grab_procs = []
         # convención del cliente web: 1=izquierdo, 2=central, 3=derecho
         self.btn = {"BTN_MOUSE": 1, "BTN_LEFT": 1, "BTN_MIDDLE": 2, "BTN_RIGHT": 3}
+
+    # --- común ------------------------------------------------------------
+    def apply_move(self, dx, dy):
+        with self.moves:
+            self.dx += dx
+            self.dy += dy
 
     def flush_moves(self):
         while True:
@@ -193,6 +224,71 @@ class Router:
                                   "dx": round(dx * self.sens),
                                   "dy": round(dy * self.sens)})
 
+    # --- modo GRAB (sin fantasma) ------------------------------------------
+    def _drain_stderr(self, stream, node):
+        try:
+            for line in stream:
+                text = line.decode("utf-8", "replace").strip()
+                if text:
+                    log(f"grabber[{node}]: {text}")
+        except Exception:
+            pass
+
+    def _dispatch(self, typ, code, val):
+        if typ == EV_REL:
+            if code == REL_X:
+                self.apply_move(val, 0)
+            elif code == REL_Y:
+                self.apply_move(0, val)
+            elif code == REL_WHEEL:
+                # REL_WHEEL positivo = rueda hacia arriba (AXIS_VSCROLL positivo)
+                self.bridge.post({"t": "wheel", "d": max(-1, min(1, val)), "n": 1})
+        elif typ == EV_KEY and code in GRAB_BTN_TO_WEB:
+            self.bridge.post({"t": "mbtn", "b": GRAB_BTN_TO_WEB[code], "down": bool(val)})
+
+    def watch_grab(self, node):
+        """Eventos en EXCLUSIVA (EVIOCGRAB): el puntero del teléfono NO se
+        mueve. Si el kernel/SELinux niega el grab (exit 3), cae al modo legacy
+        avisando del fantasma."""
+        while True:
+            if dex_stopped():
+                return
+            proc = subprocess.Popen(
+                [ADB, "-s", self.serial, "shell", f"{GRAB_REMOTE} {node}"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.grab_procs.append(proc)
+            threading.Thread(target=self._drain_stderr, args=(proc.stderr, node),
+                             daemon=True).start()
+            log(f"grab exclusivo activo en {node}: el mouse ya no mueve la pantalla del teléfono")
+            buf = b""
+            while True:
+                chunk = proc.stdout.read(4096)
+                if not chunk:
+                    break
+                buf += chunk
+                while len(buf) >= 8:
+                    rec, buf = buf[:8], buf[8:]
+                    typ, code, val = struct.unpack("<HHi", rec)
+                    if typ == 0xFFFF:      # heartbeat del grabber
+                        continue
+                    self._dispatch(typ, code, val)
+            code = proc.wait()
+            try:
+                self.grab_procs.remove(proc)
+            except ValueError:
+                pass
+            if code == 3:
+                log(f"EVIOCGRAB denegado en {node} (permisos del dispositivo); "
+                    "cayendo al modo LEGACY: el puntero TAMBIÉN se moverá en la "
+                    "pantalla del teléfono.")
+                self.watch_node(node)   # legacy: bucle infinito
+                return
+            if dex_stopped():
+                return
+            log(f"grabber de {node} terminó (exit {code}); reintentando en 2 s")
+            time.sleep(2)
+
+    # --- modo LEGACY (getevent, con fantasma) -------------------------------
     def watch_node(self, node):
         # Formato verificado en Android 16 (S25): la línea NO lleva nombre de
         # dispositivo; va "[ timestamp] EV_REL       REL_X                valor".
@@ -205,14 +301,12 @@ class Router:
             proc = subprocess.Popen(
                 [ADB, "-s", self.serial, "shell", "getevent", "-lt", node],
                 stdout=subprocess.PIPE, text=True, bufsize=1)
-            log(f"escuchando {node}")
+            log(f"escuchando {node} (legacy)")
             unmatched = 0
             for raw in proc.stdout:
                 line = raw.strip()
                 match = pattern.match(line)
                 if not match:
-                    # Muestra de líneas con eventos que el patrón no entendió:
-                    # sin esto, un cambio de formato fallaría en silencio otra vez.
                     if unmatched < 3 and ("EV_REL" in line or "EV_KEY" in line):
                         log(f"evento no reconocido (muestra): {line}")
                         unmatched += 1
@@ -220,18 +314,14 @@ class Router:
                 kind, code, val = match.group(1), match.group(2), match.group(3)
                 if kind == "EV_REL":
                     if code == "REL_X":
-                        with self.moves:
-                            self.dx += signed32(val)
+                        self.apply_move(signed32(val), 0)
                     elif code == "REL_Y":
-                        with self.moves:
-                            self.dy += signed32(val)
+                        self.apply_move(0, signed32(val))
                     elif code == "REL_WHEEL":
-                        # REL_WHEEL positivo = rueda hacia arriba (AXIS_VSCROLL positivo)
                         self.bridge.post({"t": "wheel",
                                           "d": max(-1, min(1, signed32(val))), "n": 1})
-                    # REL_HWHEEL (scroll horizontal) se ignora: el cliente solo inyecta scroll vertical
                 else:
-                    if code not in self.btn:      # botones laterales extra: ignorados
+                    if code not in self.btn:
                         continue
                     if val == "DOWN":
                         down = True
@@ -241,6 +331,8 @@ class Router:
                         down = val != "00000000"
                     self.bridge.post({"t": "mbtn", "b": self.btn[code], "down": down})
             code = proc.wait()
+            if dex_stopped():
+                return
             log(f"{node} se cerró (exit {code}); reintento en 2 s")
             time.sleep(2)
 
@@ -265,6 +357,8 @@ def main():
         sys.exit(1)
     log(f"teléfono {serial}; bridge https://{host}:{port}")
 
+    grab_ok = push_grabber(serial)
+
     nodes = []
     while not nodes:
         if dex_stopped():
@@ -277,14 +371,37 @@ def main():
 
     log(f"mouse detectado en {', '.join(nodes)}")
     router = Router(serial, Bridge(host, port), sens, flush_ms)
+
+    # Al morir este proceso (stop-dex o marca de parada), terminar los adb del
+    # grabber: cerrar su fd libera el EVIOCGRAB y el mouse vuelve al teléfono.
+    def release_grabs():
+        for proc in list(router.grab_procs):
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+    atexit.register(release_grabs)
+
+    def on_term(_signum, _frame):
+        log("deteniendo el enrutador: liberando el grab del mouse")
+        release_grabs()
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, on_term)
+    signal.signal(signal.SIGINT, on_term)
+
     threading.Thread(target=router.flush_moves, daemon=True).start()
     for node in nodes:
-        threading.Thread(target=router.watch_node, args=(node,), daemon=True).start()
+        if grab_ok:
+            threading.Thread(target=router.watch_grab, args=(node,), daemon=True).start()
+        else:
+            log("modo LEGACY (getevent): el puntero TAMBIÉN se moverá en la pantalla del teléfono.")
+            threading.Thread(target=router.watch_node, args=(node,), daemon=True).start()
     log("enrutando: mueve el mouse Bluetooth y verás el cursor en el DeX")
     while True:
         time.sleep(5)
         if dex_stopped():
-            log("el DeX se detuvo; el mouse vuelve a su comportamiento normal.")
+            log("el DeX se detuvo; liberando el grab (el mouse vuelve al teléfono).")
+            release_grabs()
             sys.exit(0)
 
 
