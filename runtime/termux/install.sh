@@ -12,7 +12,7 @@
 #  5. Instala los atajos de Termux:Widget y el arranque de Termux:Boot.
 #  6. Parchea server.py y web/index.html (endpoint /api/mouse + cursor en tablet).
 #  7. Compila native/mouse-grab (EVIOCGRAB: sin movimiento fantasma en el
-#     teléfono; si no compila, el enrutado cae al modo legacy con aviso).
+#     teléfono; si no compila o no corre, el enrutado cae al modo legacy con aviso).
 #
 # Es idempotente: nunca sobrescribe tokens, TLS o configuración existentes.
 # No incluye secretos: todo el material sensible se crea en ~/.config/wtm.
@@ -50,8 +50,11 @@ is_termux || fail "Este instalador debe ejecutarse en Termux en el teléfono fue
 # iproute2 se instala por completitud, pero Android moderno restringe los sockets
 # netlink para apps normales, así que 'ip' falla con "Permission denied" en
 # teléfonos recientes; la detección de IP usa entonces el fallback de Python.
+# OJO: 'pkg list-installed' imprime "clang/stable,now 21.1.8-3" (con sufijo de
+# repo), no "clang" — el patrón debe ser "^<pkg>/" o nunca matchea y pkg
+# install corre como no-op en cada instalación.
 for pkgname in python openssl openssl-tool curl iproute2 clang; do
-    if ! "$PREFIX/bin/pkg" list-installed 2>/dev/null | grep -q "^$pkgname\$"; then
+    if ! "$PREFIX/bin/pkg" list-installed 2>/dev/null | grep -q "^$pkgname/"; then
         log "Instalando dependencia: $pkgname"
         "$PREFIX/bin/pkg" install -y "$pkgname" >/dev/null || fail "No se pudo instalar $pkgname."
     fi
@@ -137,9 +140,16 @@ fi
 # EVIOCGRAB sobre nodos de input. Si algo falla, el enrutado del mouse cae
 # automáticamente al modo legacy (getevent) — funciona igual pero con
 # movimiento fantasma en la pantalla del teléfono; el log lo avisa.
+#
+# IMPORTANTE: SIN -static. El clang de Termux no incluye CRT estático
+# (crtbegin_static.o) ni libc.a — bionic no se distribuye estática — y el
+# enlazado estático falla SIEMPRE (verificado en S25: "cannot open
+# crtbegin_static.o" + "unable to find library -lc"). Un binario dinámico
+# normal usa el linker64 del sistema y corre como usuario shell vía adb;
+# mouse-route.py lo verifica en runtime (si no arranca, cae a legacy).
 GRAB_BIN="$INSTALL_DIR/native/mouse-grab"
 if [ -f "$INSTALL_DIR/native/mouse-grab.c" ]; then
-    if "$PREFIX/bin/clang" -O2 -static -o "$GRAB_BIN" "$INSTALL_DIR/native/mouse-grab.c" 2>"$PREFIX/tmp/wtm-grab-build.log"; then
+    if "$PREFIX/bin/clang" -O2 -o "$GRAB_BIN" "$INSTALL_DIR/native/mouse-grab.c" 2>"$PREFIX/tmp/wtm-grab-build.log"; then
         log "native/mouse-grab compilado (modo sin movimiento fantasma activo)."
     else
         log "AVISO: no se pudo compilar mouse-grab (detalle en $PREFIX/tmp/wtm-grab-build.log)."
@@ -267,5 +277,5 @@ log "en la página coincide con $FINGERPRINT ($FINGERPRINT_FILE)."
 log "Si no coincide, no introduzcas tokens y revisa la red."
 log "Verificación local: curl -sk https://127.0.0.1:$PORT/healthz"
 log "Mouse físico: modo grab (sin movimiento en la pantalla del teléfono) si el"
-log "grabber compiló; si no, modo legacy con aviso en el log del enrutador."
+log "grabber compiló y corre; si no, modo legacy con aviso en el log del enrutador."
 log "Desactiva el enrutado del mouse con MOUSE_ROUTE=0 en server.env."
