@@ -15,6 +15,13 @@ FPS="${FPS:-60}"
 SCID="${SCID:-7777}"
 SCRCPY_PORT="${SCRCPY_PORT:-1234}"
 
+# Mouse UHID: desde scrcpy 3.3 el server puede crear un mouse virtual UHID y
+# asociarlo al display virtual (permiso ASSOCIATE_INPUT_DEVICE_TO_DISPLAY,
+# Android 15+). Esto da un CURSOR REAL (hover, clic derecho) en el display
+# virtual en vez de inyección de toques. MOUSE_MODE=uhid por defecto;
+# MOUSE_MODE=inject (o vacío) restaura la inyección clásica si hiciera falta.
+MOUSE_MODE="${MOUSE_MODE:-uhid}"
+
 log(){ echo "[scrcpy] $*"; }
 
 PHONE_MODEL="${WTM_PHONE_MODEL:-SM-S931B}"
@@ -80,26 +87,43 @@ if [ -n "${NEW_DISPLAY:-}" ]; then
   NEW_DISPLAY_OPT="new_display=${NEW_DISPLAY}"
   log "modo display virtual: ${NEW_DISPLAY} (ignora max_size)"
 fi
+MOUSE_OPT=""
+if [ -n "$MOUSE_MODE" ] && [ "$MOUSE_MODE" != "inject" ]; then
+  MOUSE_OPT="mouse=${MOUSE_MODE}"
+  log "mouse: ${MOUSE_MODE} (cursor UHID asociado al display virtual, Android 15+)"
+fi
 log "arrancando scrcpy-server (${MAX_SIZE}px, ${BITRATE} bps, ${FPS}fps${NEW_DISPLAY:+", display virtual ${NEW_DISPLAY}"})..."
 # IMPORTANTE: usar 'env CLASSPATH=... app_process ... &' directamente. El patrón
 # 'nohup sh -c "CLASSPATH=... app_process ..."' hace que app_process muera al cerrar
 # el shell (dejaba el DeX congelado). 'env' + '&' mantiene el proceso vivo.
-"$ADB" -s "$PHONE" shell "env CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / com.genymobile.scrcpy.Server 5.0.1 \
+start_server() {
+  "$ADB" -s "$PHONE" shell "env CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / com.genymobile.scrcpy.Server 5.0.1 \
   scid=${SCID} tunnel_forward=true audio=false control=true cleanup=true \
-  raw_stream=true ${NEW_DISPLAY_OPT} max_size=${MAX_SIZE} stay_awake=true max_fps=${FPS} \
+  raw_stream=true ${NEW_DISPLAY_OPT} ${MOUSE_OPT} max_size=${MAX_SIZE} stay_awake=true max_fps=${FPS} \
   video_bit_rate=${BITRATE} video_codec_options=i-frame-interval=1,bitrate-mode=2 \
   >/data/local/tmp/scrcpy.log 2>&1 &" 2>&1
+}
+start_server
 
-ready=0
-for _ in $(seq 1 10); do
-  SCRCPY_PID=$(scrcpy_pid || true)
-  if [ -n "$SCRCPY_PID" ]; then
-    ready=1
-    break
-  fi
-  sleep 1
-done
-[ "$ready" -eq 1 ] || { log "scrcpy-server no apareció; revisa /data/local/tmp/scrcpy.log."; exit 1; }
+wait_ready() {
+  local i
+  for i in $(seq 1 10); do
+    SCRCPY_PID=$(scrcpy_pid || true)
+    if [ -n "$SCRCPY_PID" ]; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+
+if ! wait_ready && [ -n "$MOUSE_OPT" ]; then
+  log "el server no arrancó con mouse=${MOUSE_MODE}; reintentando sin ese parámetro (inyección clásica)."
+  MOUSE_OPT=""
+  start_server
+fi
+if ! wait_ready; then
+  log "scrcpy-server no apareció; revisa /data/local/tmp/scrcpy.log."
+  exit 1
+fi
 printf '%s\n' "$SCRCPY_PID" >"$PREFIX/tmp/rd-scrcpy.pid"
 
 # --- 5. poblar el display virtual (bug #8) ----------------------------------
