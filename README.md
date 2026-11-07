@@ -122,12 +122,20 @@ is not used for video.
    In addition, the One UI Recents/task-switcher does not work on virtual displays: the
    recents view opens on the default display and appears empty, so task switching must
    use a keyboard task-switcher shortcut or relaunching apps.
-8. **Bluetooth peripherals paired with the phone do not reach the virtual display.**
-   Input into the virtual display must arrive through the tablet browser session:
-   touch, on-screen keyboard, and any mouse or keyboard paired to the **tablet** travel
-   over WebSocket into the scrcpy control socket. A Bluetooth mouse paired with the
-   phone only moves on the phone's physical screen; pair input devices with the
-   tablet instead.
+8. **Pointer input reaches the virtual display through the tablet browser; the runtime
+   defaults to a UHID mouse associated with the virtual display.** The launcher starts
+   the scrcpy server with `mouse=uhid` by default (`MOUSE_MODE=uhid`): on Android 15+
+   (`ASSOCIATE_INPUT_DEVICE_TO_DISPLAY`) the server registers a virtual UHID mouse and
+   associates it with the virtual display, so pointer events sent by the tablet browser
+   produce a real system cursor (hover, right-click, wheel) inside the virtual display.
+   Set `MOUSE_MODE=inject` (or empty) in `server.env` to restore classic touch-style
+   injection; the launcher also retries without the parameter automatically if the
+   server rejects it. A physical Bluetooth mouse paired with the **phone** still moves
+   on the phone's physical screen: Android routes phone-paired peripherals to the
+   default display, and re-associating a physical device requires Android internal
+   APIs that the removed experimental helper used. Pair input devices with the
+   **tablet** instead — their pointer events travel through the browser session into
+   the virtual display.
 
 ## Hardware requirements: what we can and cannot claim
 
