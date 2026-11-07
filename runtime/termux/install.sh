@@ -2,7 +2,7 @@
 # WTM install.sh — instalador idempotente para Termux en el teléfono fuente.
 #
 # Qué hace:
-#  1. Instala las dependencias de Termux (pkg) si faltan.
+#  1. Instala las dependencias de Termux (pkg) si faltan (clang incluido).
 #  2. Copia las fuentes del paquete a la carpeta de despliegue.
 #  3. Descarga el scrcpy-server oficial v5.0.1 y verifica su SHA-256.
 #  4. Genera credenciales ÚNICAS por instalación (fuera de este repositorio):
@@ -10,6 +10,9 @@
 #       - certificado y llave TLS propias
 #       - server.env con puerto/host autorizado
 #  5. Instala los atajos de Termux:Widget y el arranque de Termux:Boot.
+#  6. Parchea server.py y web/index.html (endpoint /api/mouse + cursor en tablet).
+#  7. Compila native/mouse-grab (EVIOCGRAB: sin movimiento fantasma en el
+#     teléfono; si no compila, el enrutado cae al modo legacy con aviso).
 #
 # Es idempotente: nunca sobrescribe tokens, TLS o configuración existentes.
 # No incluye secretos: todo el material sensible se crea en ~/.config/wtm.
@@ -41,10 +44,13 @@ is_termux || fail "Este instalador debe ejecutarse en Termux en el teléfono fue
 # --- 1. dependencias -------------------------------------------------------
 # Nota: en Termux 'openssl' son solo las librerías; el comando es 'openssl-tool'.
 # 'aiohttp' NO existe como paquete de Termux: se instala vía pip más abajo.
+# 'clang' compila native/mouse-grab (EVIOCGRAB): pesado pero solo se instala
+# una vez; sin él, el enrutado del mouse funciona en modo legacy (con movimiento
+# fantasma en la pantalla del teléfono).
 # iproute2 se instala por completitud, pero Android moderno restringe los sockets
 # netlink para apps normales, así que 'ip' falla con "Permission denied" en
 # teléfonos recientes; la detección de IP usa entonces el fallback de Python.
-for pkgname in python openssl openssl-tool curl iproute2; do
+for pkgname in python openssl openssl-tool curl iproute2 clang; do
     if ! "$PREFIX/bin/pkg" list-installed 2>/dev/null | grep -q "^$pkgname\$"; then
         log "Instalando dependencia: $pkgname"
         "$PREFIX/bin/pkg" install -y "$pkgname" >/dev/null || fail "No se pudo instalar $pkgname."
@@ -89,7 +95,7 @@ if [ -z "$BIND_HOST" ]; then
 fi
 
 # --- 3. copiar fuentes (idempotente) ---------------------------------------
-mkdir -p "$INSTALL_DIR/web" "$INSTALL_DIR/jvm"
+mkdir -p "$INSTALL_DIR/web" "$INSTALL_DIR/jvm" "$INSTALL_DIR/native"
 for item in server.py dex.sh scrcpy-phone.sh watchdog.sh find-adb-port.py start_phone.sh update-network.sh mouse-route.py; do
     [ -f "$SOURCE_DIR/$item" ] || fail "Falta $item en el paquete."
     if ! cmp -s "$SOURCE_DIR/$item" "$INSTALL_DIR/$item" 2>/dev/null; then
@@ -104,22 +110,46 @@ for item in index.html panel.html; do
         log "Copiado web/$item"
     fi
 done
+if [ -f "$SOURCE_DIR/native/mouse-grab.c" ]; then
+    if ! cmp -s "$SOURCE_DIR/native/mouse-grab.c" "$INSTALL_DIR/native/mouse-grab.c" 2>/dev/null; then
+        cp "$SOURCE_DIR/native/mouse-grab.c" "$INSTALL_DIR/native/mouse-grab.c"
+        log "Copiado native/mouse-grab.c"
+    fi
+fi
 chmod +x "$INSTALL_DIR/dex.sh" "$INSTALL_DIR/scrcpy-phone.sh" \
         "$INSTALL_DIR/watchdog.sh" "$INSTALL_DIR/start_phone.sh" \
         "$INSTALL_DIR/update-network.sh"
 
-# --- 4. parchear server.py con el endpoint de enrutado del mouse -----------
+# --- 3b. parchear server.py + web/index.html (endpoint /api/mouse + cursor) --
 # El endpoint local /api/mouse y los tipos mdx/mbtn son parte del runtime
 # publicado; el parche es IDEMPOTENTE y con anclas exactas (falla ruidosamente
-# si server.py no es la versión esperada; nunca rompe el archivo).
+# si el archivo no es la versión esperada; nunca rompe nada a medias).
 if [ -f "$SOURCE_DIR/tools/patch-mouse-endpoint.py" ]; then
-    "$PREFIX/bin/python3" "$SOURCE_DIR/tools/patch-mouse-endpoint.py" "$INSTALL_DIR/server.py" || \
+    "$PREFIX/bin/python3" "$SOURCE_DIR/tools/patch-mouse-endpoint.py" \
+        "$INSTALL_DIR/server.py" "$INSTALL_DIR/web/index.html" || \
         fail "El parche del endpoint /api/mouse falló; revisa el mensaje anterior."
 else
     fail "Falta tools/patch-mouse-endpoint.py en el paquete."
 fi
 
-# --- 5. scrcpy-server oficial con checksum ---------------------------------
+# --- 3c. compilar el grabber EVIOCGRAB (modo sin fantasma) ------------------
+# El helper se ejecuta vía adb (shell) como usuario shell: puede hacer
+# EVIOCGRAB sobre nodos de input. Si algo falla, el enrutado del mouse cae
+# automáticamente al modo legacy (getevent) — funciona igual pero con
+# movimiento fantasma en la pantalla del teléfono; el log lo avisa.
+GRAB_BIN="$INSTALL_DIR/native/mouse-grab"
+if [ -f "$INSTALL_DIR/native/mouse-grab.c" ]; then
+    if "$PREFIX/bin/clang" -O2 -static -o "$GRAB_BIN" "$INSTALL_DIR/native/mouse-grab.c" 2>"$PREFIX/tmp/wtm-grab-build.log"; then
+        log "native/mouse-grab compilado (modo sin movimiento fantasma activo)."
+    else
+        log "AVISO: no se pudo compilar mouse-grab (detalle en $PREFIX/tmp/wtm-grab-build.log)."
+        log "El enrutado del mouse usará el modo legacy: el puntero TAMBIÉN se moverá en la pantalla del teléfono."
+    fi
+else
+    log "AVISO: falta native/mouse-grab.c; el enrutado usará el modo legacy (con movimiento fantasma)."
+fi
+
+# --- 4. scrcpy-server oficial con checksum ---------------------------------
 JAR="$INSTALL_DIR/jvm/scrcpy-server"
 if [ -f "$JAR" ]; then
     CURRENT="$("$PREFIX/bin/python3" -c 'import hashlib, sys
@@ -140,7 +170,7 @@ else
     log "scrcpy-server verificado (SHA-256 ok)."
 fi
 
-# --- 6. credenciales por instalación (nunca se sobrescriben) ---------------
+# --- 5. credenciales por instalación (nunca se sobrescriben) ---------------
 mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"
 AUTH_FILE="$CONFIG_DIR/auth-tokens.json"
@@ -154,7 +184,7 @@ with open(path, "w", encoding="utf-8") as handle:
     json.dump({"viewer": viewer, "admin": admin}, handle, indent=2)
 os.chmod(path, 0o600)
 print("token viewer:", viewer)
-print("token admin : ", admin)
+print("token admin :", admin)
 PY
     log "Tokens generados (guardados en $AUTH_FILE, permisos 600)."
     log "Guarda el token admin en un lugar seguro ANTES de continuar."
@@ -205,7 +235,7 @@ else
     log "Se conserva $ENV_FILE existente."
 fi
 
-# --- 7. atajos de Termux:Widget y Termux:Boot ------------------------------
+# --- 6. atajos de Termux:Widget y Termux:Boot ------------------------------
 if [ -d "$HOME_DIR/.shortcuts" ]; then
     for shortcut in start-dex.sh stop-dex.sh; do
         if ! cmp -s "$SOURCE_DIR/shortcuts/$shortcut" "$HOME_DIR/.shortcuts/$shortcut" 2>/dev/null; then
@@ -228,7 +258,7 @@ else
     log "No existe .termux (instala Termux:Boot para arranque automático)."
 fi
 
-# --- 8. resumen ------------------------------------------------------------
+# --- 7. resumen ------------------------------------------------------------
 log "Instalación completa en $INSTALL_DIR."
 log "Inicia el servicio: bash $HOME_DIR/.shortcuts/start-dex.sh"
 log "Abre en la tablet: https://$ALLOWED_HOSTS:$PORT/"
@@ -236,5 +266,6 @@ log "En el primer acceso, VERIFICA que la huella del certificado mostrada"
 log "en la página coincide con $FINGERPRINT ($FINGERPRINT_FILE)."
 log "Si no coincide, no introduzcas tokens y revisa la red."
 log "Verificación local: curl -sk https://127.0.0.1:$PORT/healthz"
-log "El mouse físico Bluetooth del teléfono se enruta al DeX al iniciar (MOUSE_ROUTE=1);"
-log "con MOUSE_ROUTE=0 en server.env se desactiva el enrutado."
+log "Mouse físico: modo grab (sin movimiento en la pantalla del teléfono) si el"
+log "grabber compiló; si no, modo legacy con aviso en el log del enrutador."
+log "Desactiva el enrutado del mouse con MOUSE_ROUTE=0 en server.env."
