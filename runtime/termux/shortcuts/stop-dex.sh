@@ -115,6 +115,18 @@ if [ -n "$BRIDGE_PIDS" ]; then
     done
 fi
 
+# --- detener el enrutador de mouse físico -----------------------------------
+# Se mata junto con la sesión: al apagar el DeX, el mouse Bluetooth del
+# teléfono vuelve a comportarse con normalidad en su pantalla física.
+if [ -r "$PREFIX/tmp/rd-mouse-route.pid" ]; then
+    pid=$(tr -cd '0-9' <"$PREFIX/tmp/rd-mouse-route.pid")
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        kill -TERM "$pid" 2>/dev/null || true
+        log "Enrutador de mouse detenido (PID $pid); el mouse vuelve a la pantalla del teléfono."
+    fi
+    rm -f "$PREFIX/tmp/rd-mouse-route.pid"
+fi
+
 if [ -n "$SCRCPY_PID" ] && [ -n "$PHONE" ] && remote_pid_is_scrcpy "$SCRCPY_PID"; then
     log "El proceso scrcpy sigue activo tras cerrar el forward."
     notify "DeX: el bridge se detuvo, pero scrcpy sigue activo; revisa $LOG."
