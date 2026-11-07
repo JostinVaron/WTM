@@ -23,6 +23,10 @@ ADB="$PREFIX/bin/adb"
 NEW_DISPLAY="${NEW_DISPLAY:-2000x1200/240}"
 PORT="${PORT:-8443}"
 LOG="$PREFIX/tmp/rd-bridge.log"
+# Enrutado del mouse FÍSICO Bluetooth del teléfono: 1 = activo por defecto
+# (al iniciar el DeX, el mouse controla el display virtual; al detener,
+# stop-dex.sh lo mata y el mouse vuelve a la pantalla física).
+MOUSE_ROUTE="${MOUSE_ROUTE:-1}"
 
 log(){ printf '[dex] %s %s\n' "$(date '+%F %T')" "$*"; }
 bridge_up(){ curl -sk --max-time 2 "https://${WTM_BIND_HOST:-127.0.0.1}:$PORT/healthz" >/dev/null 2>&1; }
@@ -127,18 +131,21 @@ log "LISTO: bridge y scrcpy activos. Tablet: https://${IP:-<IP>}:$PORT/#auto"
 
 # Enrutador del mouse FÍSICO Bluetooth del teléfono: al iniciar el DeX, los
 # movimientos/clics del mouse se inyectan al display virtual (el cursor se ve
-# en la tablet). stop-dex.sh lo mata, y el mouse vuelve a la pantalla física.
-# Sin root los eventos no se pueden "consumir": mientras el DeX esté activo el
-# puntero también se moverá en la pantalla del teléfono (inofensivo). Si no hay
-# mouse conectado, el enrutador simplemente espera a que lo enciendas.
-if [ -f "$PWD/mouse-route.py" ]; then
-    if [ -r "$TMPDIR/rd-mouse.pid" ] && kill -0 "$(tr -cd '0-9' <"$TMPDIR/rd-mouse.pid" 2>/dev/null)" 2>/dev/null; then
+# en la tablet). stop-dex.sh lo mata (pidfile rd-mouse-route.pid) y el mouse
+# vuelve a la pantalla física. Sin root los eventos no se pueden "consumir":
+# mientras el DeX esté activo el puntero también se moverá en la pantalla del
+# teléfono (inofensivo). Si no hay mouse conectado, el enrutador espera a que
+# lo enciendas. MOUSE_ROUTE=0 en server.env desactiva esta parte.
+if [ "$MOUSE_ROUTE" = "1" ] && [ -f "$PWD/mouse-route.py" ]; then
+    if [ -r "$TMPDIR/rd-mouse-route.pid" ] && kill -0 "$(tr -cd '0-9' <"$TMPDIR/rd-mouse-route.pid" 2>/dev/null)" 2>/dev/null; then
         log "enrutador de mouse ya estaba activo; no se duplica."
     else
         nohup "$PREFIX/bin/python3" "$PWD/mouse-route.py" >>"$TMPDIR/rd-mouse.log" 2>&1 &
-        echo "$!" >"$TMPDIR/rd-mouse.pid"
+        echo "$!" >"$TMPDIR/rd-mouse-route.pid"
         log "enrutador de mouse físico iniciado (log: $TMPDIR/rd-mouse.log)."
     fi
+elif [ "$MOUSE_ROUTE" != "1" ]; then
+    log "MOUSE_ROUTE distinto de 1; el mouse físico seguirá solo en la pantalla del teléfono."
 else
     log "mouse-route.py no presente; el mouse físico seguirá solo en la pantalla del teléfono."
 fi
