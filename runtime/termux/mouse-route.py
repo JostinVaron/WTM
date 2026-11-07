@@ -13,8 +13,11 @@ root y sin APIs ocultas:
      izquierdo se lista como BTN_MOUSE (getevent etiqueta el código 0x110 así;
      BTN_LEFT no aparece), un mouse real expone BTN_MOUSE/BTN_RIGHT/BTN_MIDDLE
      junto a REL_X/REL_Y, y su mitad "Keyboard" es un nodo separado sin REL_X.
-  2. Lee sus eventos en bruto con `adb shell getevent -lt <nodo>`
-     (valores hexadecimales de 32 bits con signo: ffffffff = -1).
+  2. Lee sus eventos en bruto con `adb shell getevent -lt <nodo>`. Formato real
+     en vivo (verificado): la línea NO lleva nombre de dispositivo —
+       "[   73280.294576] EV_REL       REL_X                00000027"
+     (timestamp entre corchetes, tipo EV_*, código, valor hex de 32 bits con
+     signo: fffffffa = -6).
   3. Los reenvía (movimiento relativo, botones, rueda) al endpoint local del
      bridge (POST /api/mouse), que los inyecta al display virtual a través del
      socket de control de scrcpy — el mismo camino que el touch de la tablet.
@@ -191,8 +194,10 @@ class Router:
                                   "dy": round(dy * self.sens)})
 
     def watch_node(self, node):
+        # Formato verificado en Android 16 (S25): la línea NO lleva nombre de
+        # dispositivo; va "[ timestamp] EV_REL       REL_X                valor".
         pattern = re.compile(
-            r"\[\s*[\d.]+\]\s+\S+:\s+(EV_REL|EV_KEY)\s+"
+            r"\[\s*[\d.]+\]\s+(EV_REL|EV_KEY)\s+"
             r"(REL_X|REL_Y|REL_WHEEL|REL_HWHEEL|BTN_MOUSE|BTN_LEFT|BTN_RIGHT|BTN_MIDDLE|"
             r"BTN_SIDE|BTN_EXTRA|BTN_FORWARD|BTN_BACK|BTN_TASK)\s+"
             r"([0-9a-fA-F]+|DOWN|UP)")
@@ -201,9 +206,16 @@ class Router:
                 [ADB, "-s", self.serial, "shell", "getevent", "-lt", node],
                 stdout=subprocess.PIPE, text=True, bufsize=1)
             log(f"escuchando {node}")
+            unmatched = 0
             for raw in proc.stdout:
-                match = pattern.match(raw.strip())
+                line = raw.strip()
+                match = pattern.match(line)
                 if not match:
+                    # Muestra de líneas con eventos que el patrón no entendió:
+                    # sin esto, un cambio de formato fallaría en silencio otra vez.
+                    if unmatched < 3 and ("EV_REL" in line or "EV_KEY" in line):
+                        log(f"evento no reconocido (muestra): {line}")
+                        unmatched += 1
                     continue
                 kind, code, val = match.group(1), match.group(2), match.group(3)
                 if kind == "EV_REL":
