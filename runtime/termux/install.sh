@@ -67,8 +67,9 @@ else
         # Fallback sin netlink: un socket UDP no envía paquetes, solo consulta
         # al enrutador de Android qué IP local usaría hacia 8.8.8.8. Funciona
         # en Android moderno donde netlink está restringido para apps.
-        ALLOWED_HOSTS="$("$PREFIX/bin/python3" - <<'PY'
-import socket
+        # Nota: python3 -c en vez de heredoc; los heredocs dentro de $( ) dan
+        # problemas de parseo en el bash de Termux (visto en S25 real).
+        ALLOWED_HOSTS="$("$PREFIX/bin/python3" -c 'import socket
 try:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.connect(("8.8.8.8", 80))
@@ -77,9 +78,7 @@ try:
     if ip and not ip.startswith("0.") and ip != "127.0.0.1":
         print(ip)
 except Exception:
-    pass
-PY
-)"
+    pass')"
     fi
     [ -z "$ALLOWED_HOSTS" ] && fail "No se detectó una IP LAN; define WTM_ALLOWED_HOSTS manualmente."
 fi
@@ -112,14 +111,11 @@ chmod +x "$INSTALL_DIR/dex.sh" "$INSTALL_DIR/scrcpy-phone.sh" \
 # --- 4. scrcpy-server oficial con checksum ---------------------------------
 JAR="$INSTALL_DIR/jvm/scrcpy-server"
 if [ -f "$JAR" ]; then
-    CURRENT="$("$PREFIX/bin/python3" - <<'PY'
-import hashlib, sys
+    CURRENT="$("$PREFIX/bin/python3" -c 'import hashlib, sys
 try:
     print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())
 except Exception:
-    print("unreadable")
-PY
-    "$JAR")"
+    print("unreadable")' "$JAR")"
     if [ "$CURRENT" = "$SCRCPY_SHA256" ]; then
         log "scrcpy-server v$SCRCPY_VERSION ya presente con checksum correcto."
     else
@@ -170,12 +166,9 @@ if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
 else
     log "Se conserva el material TLS existente en $CONFIG_DIR."
 fi
-FINGERPRINT="$("$PREFIX/bin/python3" - <<'PY'
-import hashlib, sys
+FINGERPRINT="$("$PREFIX/bin/python3" -c 'import hashlib, sys
 digest = hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest().upper()
-print(":".join(digest[i:i+2] for i in range(0, 64, 2)))
-PY
-"$CERT")"
+print(":".join(digest[i:i+2] for i in range(0, 64, 2)))' "$CERT")"
 printf '%s\n' "$FINGERPRINT" >"$FINGERPRINT_FILE"
 chmod 644 "$FINGERPRINT_FILE"
 log "Huella SHA-256 del certificado: $FINGERPRINT"
