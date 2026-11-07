@@ -106,6 +106,16 @@ is not used for video.
    (26/26 passing) plus a completed independent security review and the completed
    on-device certification. This is a source-available prototype, not a Play-Store
    style product. See [certification](docs/certification.md).
+6. **The tablet browser must support WebCodecs.** The web client decodes H.264
+   exclusively via the WebCodecs API (`VideoDecoder`) — there is no MSE or
+   `<video>` fallback. **Chrome (or another Chromium-based browser with WebCodecs
+   enabled) is required; Firefox does not support WebCodecs H.264 decoding and shows a
+   black screen with `0 fps, 0.0 Mbps` and the `sin WebCodecs` overlay note.** On a
+   Galaxy Tab S6 Lite, updated Chrome works; keep the tablet's Chrome up to date.
+7. **The virtual display starts empty (black).** An Android virtual display is created
+   blank: the launcher does not start on it automatically. The runtime launcher script
+   starts the HOME intent on the newly created display; apps that set `FLAG_SECURE`
+   (banking, DRM apps) render as black by design and cannot be captured.
 
 ## Hardware requirements: what we can and cannot claim
 
