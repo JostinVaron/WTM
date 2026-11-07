@@ -15,12 +15,14 @@ FPS="${FPS:-60}"
 SCID="${SCID:-7777}"
 SCRCPY_PORT="${SCRCPY_PORT:-1234}"
 
-# Mouse UHID: desde scrcpy 3.3 el server puede crear un mouse virtual UHID y
-# asociarlo al display virtual (permiso ASSOCIATE_INPUT_DEVICE_TO_DISPLAY,
-# Android 15+). Esto da un CURSOR REAL (hover, clic derecho) en el display
-# virtual en vez de inyección de toques. MOUSE_MODE=uhid por defecto;
-# MOUSE_MODE=inject (o vacío) restaura la inyección clásica si hiciera falta.
-MOUSE_MODE="${MOUSE_MODE:-uhid}"
+# Mouse UHID (OPTATIVO, experimental): con MOUSE_MODE=uhid el server crea un
+# mouse virtual UHID asociado al display virtual (scrcpy >=3.3, permiso
+# ASSOCIATE_INPUT_DEVICE_TO_DISPLAY de Android 15+). POR DEFECTO está apagado:
+# la inyección clásica (POINTER_ID_MOUSE, hover con cursor en el DeX) está
+# probada y es el mismo canal que usa mouse-route.py para enrutar el mouse
+# físico Bluetooth del teléfono; habilitar uhid además podría crear dos
+# punteros en conflicto. Para probarlo: MOUSE_MODE=uhid en server.env.
+MOUSE_MODE="${MOUSE_MODE:-}"
 
 log(){ echo "[scrcpy] $*"; }
 
@@ -90,7 +92,7 @@ fi
 MOUSE_OPT=""
 if [ -n "$MOUSE_MODE" ] && [ "$MOUSE_MODE" != "inject" ]; then
   MOUSE_OPT="mouse=${MOUSE_MODE}"
-  log "mouse: ${MOUSE_MODE} (cursor UHID asociado al display virtual, Android 15+)"
+  log "mouse: ${MOUSE_MODE} (experimental; el mouse físico del teléfono se enruta aparte con mouse-route.py)"
 fi
 log "arrancando scrcpy-server (${MAX_SIZE}px, ${BITRATE} bps, ${FPS}fps${NEW_DISPLAY:+", display virtual ${NEW_DISPLAY}"})..."
 # IMPORTANTE: usar 'env CLASSPATH=... app_process ... &' directamente. El patrón
