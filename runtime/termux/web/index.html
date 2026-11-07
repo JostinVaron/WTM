@@ -42,7 +42,7 @@ let offset = 0, bestRtt = 1e9;
 const st = { frames: 0, submitted: 0, decoded: 0, bytes: 0, dropped: 0, lat: [], dec: [], tot: [], enc: [], t0: performance.now() };
 const inflight = new Map();   // timestamp -> { arrival, srv }
 let extra = "";
-let codecLabel = "?", hwLabel = "?";
+let codecLabel = "—", hwLabel = "—";
 
 function clog(m) { try { fetch("/log", { method: "POST", body: m }); } catch (e) {} }
 window.addEventListener("error", (e) => clog("JSERR " + e.message + " @" + e.lineno));
