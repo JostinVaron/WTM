@@ -8,8 +8,17 @@ export PREFIX=/data/data/com.termux/files/usr
 DEX_DIR="$HOME/dex"
 LOG="$PREFIX/tmp/rd-start.log"
 PORT="${PORT:-8443}"
-HEALTH_URL="https://${WTM_BIND_HOST:-127.0.0.1}:$PORT/healthz"
 mkdir -p "$PREFIX/tmp"
+# Cargar server.env para conocer el BIND_HOST real del bridge (bug #7):
+# sin esto, WTM_BIND_HOST quedaba vacío y el health-check apuntaba a
+# 127.0.0.1, donde el servidor endurecido no escucha → falso negativo.
+CONFIG="$HOME/.config/wtm/server.env"
+if [ -r "$CONFIG" ]; then
+    set -a
+    . "$CONFIG"
+    set +a
+fi
+HEALTH_URL="https://${WTM_BIND_HOST:-127.0.0.1}:$PORT/healthz"
 exec >>"$LOG" 2>&1
 log(){ printf '[start-dex] %s %s\n' "$(date '+%F %T')" "$*"; }
 notify(){
