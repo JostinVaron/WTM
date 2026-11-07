@@ -40,10 +40,11 @@ is_termux || fail "Este instalador debe ejecutarse en Termux en el teléfono fue
 
 # --- 1. dependencias -------------------------------------------------------
 # Nota: en Termux 'openssl' son solo las librerías; el comando es 'openssl-tool'.
+# 'aiohttp' NO existe como paquete de Termux: se instala vía pip más abajo.
 # iproute2 se instala por completitud, pero Android moderno restringe los sockets
 # netlink para apps normales, así que 'ip' falla con "Permission denied" en
 # teléfonos recientes; la detección de IP usa entonces el fallback de Python.
-for pkgname in python aiohttp openssl openssl-tool curl iproute2; do
+for pkgname in python openssl openssl-tool curl iproute2; do
     if ! "$PREFIX/bin/pkg" list-installed 2>/dev/null | grep -q "^$pkgname\$"; then
         log "Instalando dependencia: $pkgname"
         "$PREFIX/bin/pkg" install -y "$pkgname" >/dev/null || fail "No se pudo instalar $pkgname."
