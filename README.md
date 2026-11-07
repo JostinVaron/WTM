@@ -112,10 +112,22 @@ is not used for video.
    enabled) is required; Firefox does not support WebCodecs H.264 decoding and shows a
    black screen with `0 fps, 0.0 Mbps` and the `sin WebCodecs` overlay note.** On a
    Galaxy Tab S6 Lite, updated Chrome works; keep the tablet's Chrome up to date.
-7. **The virtual display starts empty (black).** An Android virtual display is created
-   blank: the launcher does not start on it automatically. The runtime launcher script
-   starts the HOME intent on the newly created display; apps that set `FLAG_SECURE`
-   (banking, DRM apps) render as black by design and cannot be captured.
+7. **The virtual display starts empty (black), and vendor launchers may refuse to run
+   on it.** An Android virtual display is created blank. The runtime launcher script
+   starts the HOME intent on the newly created display; on Samsung One UI the stock
+   launcher (`com.sec.android.app.launcher`) rejects launching on a virtual display
+   from the shell (`SecurityException ... launchDisplayId`), so the script falls back
+   to launching the exported Settings activity as initial content. Apps that set
+   `FLAG_SECURE` (banking, DRM apps) render as black by design and cannot be captured.
+   In addition, the One UI Recents/task-switcher does not work on virtual displays: the
+   recents view opens on the default display and appears empty, so task switching must
+   use a keyboard task-switcher shortcut or relaunching apps.
+8. **Bluetooth peripherals paired with the phone do not reach the virtual display.**
+   Input into the virtual display must arrive through the tablet browser session:
+   touch, on-screen keyboard, and any mouse or keyboard paired to the **tablet** travel
+   over WebSocket into the scrcpy control socket. A Bluetooth mouse paired with the
+   phone only moves on the phone's physical screen; pair input devices with the
+   tablet instead.
 
 ## Hardware requirements: what we can and cannot claim
 
