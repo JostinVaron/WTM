@@ -18,7 +18,6 @@ Provides:
 
 Host-testable on any Python 3.10+; no I/O, no server dependency.
 """
-import os
 
 HEVC_NAL_VPS = 32
 HEVC_NAL_SPS = 33
@@ -169,9 +168,9 @@ def build_hvcc(vps, sps, pps, avg_frame_rate=0):
             if not nal:
                 raise ValueError("empty NAL in hvcC array")
         rec.append(0x80 | nal_type)          # array_completeness=1
-        rec.append(len(nals).to_bytes(2, "big"))
+        rec += len(nals).to_bytes(2, "big")  # numNalus (2 bytes)
         for nal in nals:
-            rec.append(len(nal).to_bytes(2, "big"))
+            rec += len(nal).to_bytes(2, "big")  # nalUnitLength (2 bytes)
             rec += nal
     return bytes(rec)
 
