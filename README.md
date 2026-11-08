@@ -16,9 +16,9 @@ Tab S6 Lite (viewer, Chrome). The package is a source installer — there is no 
 ```sh
 # 1. On the source phone, in Termux:
 curl -L -o wtm.tar.gz \
-  https://github.com/JostinVaron/WTM/releases/download/v0.2.0/wtm-runtime-0.2.0.tar.gz
+  https://github.com/JostinVaron/WTM/releases/download/v0.2.1/wtm-runtime-0.2.1.tar.gz
 tar -xzf wtm.tar.gz
-cd wtm-runtime-0.2.0/runtime/termux
+cd wtm-runtime-0.2.1/runtime/termux
 bash install.sh        # installs packages, verifies the scrcpy server, generates tokens
 
 # 2. Start the bridge (Termux:Widget "start-dex" shortcut, or):
@@ -196,7 +196,7 @@ See [licensing](LICENSING.md) and third-party notices in
 ## Repository status
 
 - Public repository: [JostinVaron/WTM](https://github.com/JostinVaron/WTM)
-- Version: **v0.2.0** — published runtime, source-only (see
+- Version: **v0.2.1** — published runtime, source-only (see
   [Releases](https://github.com/JostinVaron/WTM/releases))
 - License: software [PolyForm Noncommercial 1.0.0](LICENSE), documentation
   [CC BY-NC 4.0](LICENSE-docs.txt) — see [Licensing](LICENSING.md)
