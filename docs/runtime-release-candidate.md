@@ -2,8 +2,9 @@
 
 This branch packages the active Termux runtime as a repeatable install, adds
 per-install credentials and session authentication, and records the security
-tests that back those changes. It is **not yet deployed** on the prototype
-phone. Licensing: [PolyForm Noncommercial 1.0.0](../LICENSE) for software,
+tests that back those changes. **It was deployed on the S25 (v0.1.2) and
+passed the on-device certification on 2026-11-06 (20/20 checks).** Licensing:
+[PolyForm Noncommercial 1.0.0](../LICENSE) for software,
 [CC BY-NC 4.0](../LICENSE-docs.txt) for documentation — see
 [Licensing](../LICENSING.md).
 
