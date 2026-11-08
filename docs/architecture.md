@@ -69,20 +69,22 @@ independent session.
 - passes pointer, touch, key and scroll messages to the scrcpy control connection.
 
 The service also serves a web UI/API over HTTPS (port 8443 in the current configuration).
-The certificate currently used by the local installation is self-signed. The tablet
+The certificate used by the installation is self-signed with a published SHA-256
+fingerprint that must be compared out-of-band on first connect. The tablet
 opens the HTTPS page in Chrome; WebCodecs requires a secure context. The client decodes
 H.264 and draws frames onto a full-screen canvas. Current default decoder preference is
 `prefer-software`, based on the observed tablet A/B test.
 
-The active server binds the web service to all interfaces and exposes unauthenticated
-WebSocket input and HTTP control and log endpoints. The control operation can start/stop
-helper scripts in the Termux context; the log endpoint returns recent local diagnostics.
-This is a serious pre-release security issue; the prototype must remain on a trusted
-isolated LAN. The current launcher supplies local TLS material, but the server can fall
-back to plain HTTP if TLS is not configured, so port 8443 alone does not prove that a
-connection is encrypted. Do not include the active server source in a public release
-until these interfaces are redesigned, authenticated and reviewed. See
-[Security](../SECURITY.md).
+The **published** runtime in `runtime/termux/` binds the web service to the detected
+Wi-Fi IP (not `0.0.0.0`), enforces a Host allowlist and same-site Origin on
+POST/WebSocket, requires cookie-session login with viewer/admin roles for all
+non-public paths, exposes `/healthz` machine-local without authentication, and refuses
+to start without valid TLS material (no HTTP fallback). This is the hardened design
+that passed the independent security review and the on-device certification
+(2026-11-06). The **historical pre-hardening prototype** (unauthenticated WebSocket,
+open control/log endpoints, optional HTTP fallback) is described in
+[Security](../SECURITY.md); it must never be redeployed, and the S25 has been migrated
+off it to the hardened runtime.
 
 ### 5. Return input path
 
@@ -92,13 +94,14 @@ focus/task behavior depends on Samsung's Android/DeX implementation and the app 
 on the virtual display. Physical edge gestures on the S25 were not formally tested as
 part of the documented benchmark.
 
-An optional helper also associates a paired Bluetooth mouse with the virtual display
-using Android input-manager internals. This is a separate pointer-input feature; it does
-not carry the video stream and is not required for touch input sent from the tablet.
-The helper depends on device-specific input descriptors and Android hidden APIs, so it
-must be treated as experimental. The full technical documentation of this removed
-subsystem (mechanism, recovered sources, removal rationale, reimplementation guidance)
-is in [bluetooth-mouse-routing.md](bluetooth-mouse-routing.md).
+A helper associates a paired Bluetooth mouse with the virtual display using Android
+input-manager internals. This is a separate pointer-input feature; it does not carry the
+video stream and is not required for touch input sent from the tablet. The helper depends
+on device-specific input descriptors and Android hidden APIs, so it must be treated as
+experimental; it was verified working on the S25 on 2026-11-07 (native association as
+the primary path). The full technical documentation of this subsystem (mechanism,
+recovered sources, removal rationale, reimplementation guidance) is in
+[bluetooth-mouse-routing.md](bluetooth-mouse-routing.md).
 
 ## Lifecycle and failure boundaries
 
@@ -135,11 +138,11 @@ has demonstrated Bluetooth as a viable replacement for the video transport.
 
 ## Source-of-truth and deployment drift
 
-The Termux deployment tree under `$HOME/dex` and the separate Linux
-`remote-display/` work copy are not the same version. The work copy contains historical
-Xvfb/PRoot tools and experimental files and must not be deployed without a file-by-file
-comparison. This documentation describes the active Termux architecture and separately
-labels historical paths. The documentation repository does not publish runtime code.
+The published runtime sources live in `runtime/termux/` on `main`, and the deployment
+tree under `$HOME/dex` on the S25 is produced from them by `install.sh` (v0.1.2 was
+installed on 2026-11-06 and certified on-device). The separate Linux `remote-display/`
+work copy contains historical Xvfb/PRoot tools and experimental files and must not be
+deployed without a file-by-file comparison; it is not part of this repository.
 
 ## Target architecture for a Termux-independent product
 
