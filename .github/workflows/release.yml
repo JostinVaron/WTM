@@ -52,12 +52,20 @@ jobs:
               runtime/termux/shortcuts \
               runtime/termux/boot \
               runtime/termux/tests \
+              docs/architecture.md \
+              docs/bluetooth-mouse-routing.md \
               docs/certification.md \
+              docs/dependencies.md \
               docs/deployment-termux.md \
-              docs/threat-model.md \
               docs/hevc-study.md \
+              docs/optimization.md \
               docs/performance.md \
-              docs/optimization.md
+              docs/project-governance.md \
+              docs/publishing.md \
+              docs/releases.md \
+              docs/requirements.md \
+              docs/runtime-release-candidate.md \
+              docs/threat-model.md
           cd dist
           sha256sum "wtm-runtime-${VERSION}.tar.gz" > "wtm-runtime-${VERSION}.tar.gz.sha256"
           cat "wtm-runtime-${VERSION}.tar.gz.sha256"
