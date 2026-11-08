@@ -1,0 +1,44 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Probe v2</title></head><body style="font-family:monospace;background:#111;color:#eee;padding:16px;font-size:14px">
+<div id="env" style="color:#8af;border-bottom:1px solid #444;padding-bottom:8px;margin-bottom:8px"></div>
+<div id="out">Probando…</div><div id="verdict" style="margin-top:12px;padding:10px;border:1px solid #666;border-radius:8px;white-space:pre-wrap"></div><script>
+(async()=>{
+const env=document.getElementById("env"),out=document.getElementById("out"),vd=document.getElementById("verdict");
+const gl=document.createElement("canvas").getContext("webgl");let gpu="n/d";
+try{const dbg=gl.getExtension("WEBGL_debug_renderer_info");gpu=gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL);}catch(e){}
+env.innerHTML="<b>Dispositivo que carga esta página:</b><br>UA: "+navigator.userAgent+"<br>Pantalla: "+screen.width+"×"+screen.height+" @dpr "+devicePixelRatio+"<br>GPU: "+gpu+"<br>secureContext: "+isSecureContext;
+if(!isSecureContext||!("VideoDecoder" in window)){out.innerHTML="";vd.innerHTML="⛔ Sin contexto seguro o sin WebCodecs: NO es un veredicto de codec. Verifica que abriste https:// (no http) y que Chrome está actualizado.";return;}
+const configs=[
+["HEVC Main  2000×1200 L150",  {codec:"hev1.1.6.L150.B0",codedWidth:2000,codedHeight:1200}],
+["HEVC Main  2000×1200 L123",  {codec:"hev1.1.6.L123.B0",codedWidth:2000,codedHeight:1200}],
+["HEVC Main  2000×1200 L93",   {codec:"hev1.1.6.L93.B0",codedWidth:2000,codedHeight:1200}],
+["HEVC hvc1  2000×1200 L150",  {codec:"hvc1.1.6.L150.B0",codedWidth:2000,codedHeight:1200}],
+["HEVC Main  1600×960  L123",  {codec:"hev1.1.6.L123.B0",codedWidth:1600,codedHeight:960}],
+["HEVC Main10 2000×1200 L150",{codec:"hev1.2.4.L150.B0",codedWidth:2000,codedHeight:1200}],
+["H.264 High 2000×1200 L4.2",  {codec:"avc1.64002A",codedWidth:2000,codedHeight:1200}],
+["H.264 High 2000×1200 L4.0",  {codec:"avc1.640028",codedWidth:2000,codedHeight:1200}],
+["H.264 High 1600×960  L4.0",  {codec:"avc1.640028",codedWidth:1600,codedHeight:960}],
+["AV1 Main   2000×1200",       {codec:"av01.0.08M.08",codedWidth:2000,codedHeight:1200}]
+];
+let hevc=false,avc=false,html="";
+for(const[name,cfg]of configs){
+  let s,d="";
+  try{const r=await VideoDecoder.isConfigSupported(cfg);s=r.supported?"<b style='color:#0f5'>SÍ</b>":"<b style='color:#f55'>NO</b>";d=r.config?(r.config.hardwareAcceleration||"n/d"):"";
+    if(r.supported){if(cfg.codec.startsWith("hev1")||cfg.codec.startsWith("hvc1"))hevc=true;if(cfg.codec.startsWith("avc1"))avc=true;}}
+  catch(e){s="<b style='color:#f55'>NO</b>";d="err: "+e.message;}
+  html+="<div>"+name.padEnd(26).replace(/ /g,"&nbsp;")+": "+s+" <small>"+d+"</small></div>";
+}
+let mc="no disponible";
+try{const m=await navigator.mediaCapabilities.decodingInfo({type:"file",video:{contentType:'video/mp4; codecs="hev1.1.6.L150.B0"',width:2000,height:1200,bitrate:12000000,framerate:60}});
+mc="HEVC por MediaCapabilities: "+(m.supported?"soportado":"NO soportado")+(m.powerEfficient?", eficiente":"")+"; ";
+if(m.supported)hevc=hevc||"MediaCap-yes";
+}catch(e){mc="MediaCapabilities falló: "+e.message;}
+out.innerHTML=html+"<div style='margin-top:8px;color:#8af'>"+mc+"</div>";
+const chrome=(navigator.userAgent.match(/Chrome\/(\d+)/)||[])[1]||"?";
+let v;
+if(hevc===true)v="✅ HEVC VIABLE (WebCodecs o MediaCapabilities dijeron SÍ).\nSiguiente paso: A/B medido — NO es migración; sin victoria medible contra H.264 no se cambia nada.";
+else if(hevc==="MediaCap-yes")v="⚠️ WebCodecs dice NO pero MediaCapabilities dice SÍ: señal contradictoria → probablemente falta de exposición en WebCodecs, no del hardware. Vale probar A/B por la vía hvc1 con description, y registrar el caso.";
+else if(avc)v="❌ HEVC inviable en ESTE navegador HOY (control H.264 = SÍ, probe funcional).\nIMPORTANTE — esto NO significa que la tablet no pueda: solo cierra la vía navegador.\nRutas que siguen abiertas: (1) cliente nativo MediaCodec (§4b del estudio), (2) re-test tras actualizar Chrome. Registra esta versión para comparar después.";
+else v="⛔ Probe inconcluso: ni el control H.264 pasó. Revisa: página en la TABLET vía https, Chrome actualizado, bridge activo. NO concluir NADA de esta corrida.";
+vd.innerHTML="<b>Veredicto (Chrome "+chrome+"):</b>\n"+v;
+})();
+</script></body></html>

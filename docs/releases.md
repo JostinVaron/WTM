@@ -10,10 +10,14 @@ The package includes:
 
 - `LICENSE`, `LICENSE-docs.txt`, `LICENSING.md` — software and documentation
   licenses;
-- `runtime/termux/` — server, web clients, launcher/watchdog scripts,
-  `install.sh`, `update-network.sh`, tests and the on-device certification
-  script;
-- `docs/certification.md`, `docs/deployment-termux.md`, `SECURITY.md`.
+- `runtime/termux/` — server, web clients (including the codec probe page),
+  launcher/watchdog scripts, `install.sh`, `update-network.sh`, tests and the
+  on-device certification script;
+- `runtime/termux/route-input.sh`, `mouse-route.py`, `jvm/`, `native/`,
+  `tools/` — the Bluetooth mouse routing subsystem (native association as the
+  primary path, `mouse-route.py` as fallback, idempotent patch tooling);
+- `docs/certification.md`, `docs/deployment-termux.md`, `docs/threat-model.md`,
+  `docs/performance.md`, `docs/optimization.md`, `docs/hevc-study.md`.
 
 It does **not** include: the scrcpy server binary (the installer downloads the
 official release and verifies its SHA-256), TLS keys, tokens, or any
@@ -36,22 +40,29 @@ Pushing a `v*` tag triggers `.github/workflows/release.yml`:
 4. uploads the package as a workflow artifact for inspection.
 
 `.github/workflows/ci.yml` runs the same suites plus shell/Python/JavaScript
-syntax checks and a secret sweep on every push and pull request.
+syntax checks and a fail-closed secret sweep on every push and pull request.
 
 ## Manual release (fallback)
 
 If Actions are unavailable, build and publish from a machine with `gh`:
 
 ```sh
-VERSION=0.1.0
+VERSION=0.2.0
 tar -czf "wtm-runtime-${VERSION}.tar.gz" \
     --transform "s,^,wtm-runtime-${VERSION}/," \
     LICENSE LICENSE-docs.txt LICENSING.md README.md SECURITY.md \
-    runtime/termux/server.py runtime/termux/web \
-    runtime/termux/*.sh runtime/termux/*.py \
+    AGENTS.md CODE_OF_CONDUCT.md CONTRIBUTING.md \
+    runtime/termux/server.py runtime/termux/mouse-route.py \
+    runtime/termux/find-adb-port.py runtime/termux/web \
+    runtime/termux/dex.sh runtime/termux/install.sh \
+    runtime/termux/scrcpy-phone.sh runtime/termux/route-input.sh \
+    runtime/termux/start_phone.sh runtime/termux/watchdog.sh \
+    runtime/termux/update-network.sh runtime/termux/jvm \
+    runtime/termux/native runtime/termux/tools \
     runtime/termux/shortcuts runtime/termux/boot runtime/termux/tests \
-    runtime/termux/VERSION \
-    docs/certification.md docs/deployment-termux.md
+    runtime/termux/VERSION runtime/termux/requirements.txt \
+    docs/certification.md docs/deployment-termux.md docs/threat-model.md \
+    docs/performance.md docs/optimization.md docs/hevc-study.md
 sha256sum "wtm-runtime-${VERSION}.tar.gz" > "wtm-runtime-${VERSION}.tar.gz.sha256"
 gh release create "v${VERSION}" "wtm-runtime-${VERSION}.tar.gz" \
     "wtm-runtime-${VERSION}.tar.gz.sha256" \
@@ -64,9 +75,9 @@ On the source phone, in Termux:
 
 ```sh
 curl -L -o wtm.tar.gz \
-  https://github.com/JostinVaron/WTM/releases/download/v0.1.0/wtm-runtime-0.1.0.tar.gz
+  https://github.com/JostinVaron/WTM/releases/download/v0.2.0/wtm-runtime-0.2.0.tar.gz
 tar -xzf wtm.tar.gz
-cd wtm-runtime-0.1.0/runtime/termux
+cd wtm-runtime-0.2.0/runtime/termux
 bash install.sh
 ```
 

@@ -38,6 +38,11 @@ events travel in the reverse direction.
   on this pair (2026-11-07): the phone's paired physical mouse drives the virtual
   display only — no ghost input on the phone screen, with the real Samsung cursor.
   See [bluetooth-mouse-routing.md](docs/bluetooth-mouse-routing.md).
+- HEVC decoding capability on the tablet was probed and confirmed (2026-11-08, Chrome
+  156): every HEVC variant is exposed via WebCodecs and MediaCapabilities reports a
+  power-efficient (hardware) decoder. This opens the measured H.264-vs-HEVC A/B
+  experiment; the shipped default remains H.264 until that A/B shows a win.
+  See [hevc-study.md](docs/hevc-study.md).
 
 Measurements are conditional on scene complexity, Wi-Fi, device temperature, foreground
 state, browser behavior, and battery/thermal management. See
@@ -75,6 +80,7 @@ is not used for video.
 - [Hardware, operating-system, and network requirements](docs/requirements.md)
 - [Performance measurements and acceptance criteria](docs/performance.md)
 - [Performance and optimization backlog](docs/optimization.md)
+- [Codec study: H.264 vs H.265/HEVC (probe measured)](docs/hevc-study.md)
 - [Current Termux deployment and reproduction guide](docs/deployment-termux.md)
 - [Runtime release candidate](docs/runtime-release-candidate.md)
 - [Bluetooth mouse routing (historical subsystem)](docs/bluetooth-mouse-routing.md)
@@ -164,7 +170,7 @@ See [licensing](LICENSING.md) and third-party notices in
 ## Repository status
 
 - Public repository: [JostinVaron/WTM](https://github.com/JostinVaron/WTM)
-- Version: **v0.1.1** — published runtime, source-only (see
+- Version: **v0.2.0** — published runtime, source-only (see
   [Releases](https://github.com/JostinVaron/WTM/releases))
 - License: software [PolyForm Noncommercial 1.0.0](LICENSE), documentation
   [CC BY-NC 4.0](LICENSE-docs.txt) — see [Licensing](LICENSING.md)
