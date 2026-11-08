@@ -3,21 +3,25 @@
 ## What a release contains
 
 A WTM release is a **source package** (`.tar.gz`) of the Termux runtime plus
-its licenses and the core documentation. It is not an APK: there is no signed
+its licenses and the complete documentation set. It is not an APK: there is no signed
 Android application yet, and none is claimed.
 
 The package includes:
 
 - `LICENSE`, `LICENSE-docs.txt`, `LICENSING.md` — software and documentation
   licenses;
+- `README.md`, `SECURITY.md`, `AGENTS.md`, `CODE_OF_CONDUCT.md`,
+  `CONTRIBUTING.md` — top-level project documents;
 - `runtime/termux/` — server, web clients (including the codec probe page),
   launcher/watchdog scripts, `install.sh`, `update-network.sh`, tests and the
   on-device certification script;
 - `runtime/termux/route-input.sh`, `mouse-route.py`, `jvm/`, `native/`,
   `tools/` — the Bluetooth mouse routing subsystem (native association as the
   primary path, `mouse-route.py` as fallback, idempotent patch tooling);
-- `docs/certification.md`, `docs/deployment-termux.md`, `docs/threat-model.md`,
-  `docs/performance.md`, `docs/optimization.md`, `docs/hevc-study.md`.
+- `docs/` — the complete documentation set (architecture, bluetooth-mouse
+  routing, certification, dependencies, deployment, HEVC study, optimization,
+  performance, project governance, publishing, releases, requirements,
+  runtime release candidate, threat model).
 
 It does **not** include: the scrcpy server binary (the installer downloads the
 official release and verifies its SHA-256), TLS keys, tokens, or any
@@ -27,8 +31,8 @@ per-install material. Every installation generates its own credentials.
 
 Releases use `vX.Y.Z` tags on `main`. The packaged runtime version is recorded
 in `runtime/termux/VERSION` and bumped before tagging. The current version is
-experimental and does not imply production stability or hardware
-certification.
+experimental and does not imply production stability or hardware certification
+beyond the completed on-device run on the tested pair.
 
 ## Automated release process
 
@@ -61,8 +65,12 @@ tar -czf "wtm-runtime-${VERSION}.tar.gz" \
     runtime/termux/native runtime/termux/tools \
     runtime/termux/shortcuts runtime/termux/boot runtime/termux/tests \
     runtime/termux/VERSION runtime/termux/requirements.txt \
-    docs/certification.md docs/deployment-termux.md docs/threat-model.md \
-    docs/performance.md docs/optimization.md docs/hevc-study.md
+    docs/architecture.md docs/bluetooth-mouse-routing.md \
+    docs/certification.md docs/dependencies.md \
+    docs/deployment-termux.md docs/hevc-study.md docs/optimization.md \
+    docs/performance.md docs/project-governance.md docs/publishing.md \
+    docs/releases.md docs/requirements.md \
+    docs/runtime-release-candidate.md docs/threat-model.md
 sha256sum "wtm-runtime-${VERSION}.tar.gz" > "wtm-runtime-${VERSION}.tar.gz.sha256"
 gh release create "v${VERSION}" "wtm-runtime-${VERSION}.tar.gz" \
     "wtm-runtime-${VERSION}.tar.gz.sha256" \
