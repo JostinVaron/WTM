@@ -8,12 +8,15 @@ security assessment.
 
 Two runtimes exist and must not be confused:
 
-1. **The prototype currently deployed on the S25** still uses a self-signed
+1. **The prototype deployed on the S25 before the hardening** used a self-signed
    certificate with no application authentication for its WebSocket, control
-   or log endpoints. Its control route can launch start/stop/input-routing
-   scripts with the Termux user's privileges, and it can fall back to plain
-   HTTP. Treat it as a privileged remote-control surface, not merely a video
-   viewer, and keep it off untrusted networks.
+   or log endpoints. Its control route could launch start/stop/input-routing
+   scripts with the Termux user's privileges, and it could fall back to plain
+   HTTP. It had to be treated as a privileged remote-control surface, not
+   merely a video viewer, and kept off untrusted networks. **On 2026-11-06 the
+   S25 was migrated to the hardened runtime (v0.1.2) and passed the on-device
+   certification (20/20 checks), so this prototype description is now
+   historical.**
 2. **The published runtime in `runtime/termux/`** is the hardened release
    candidate: cookie sessions with separate viewer/admin tokens, same-site
    Origin enforcement, Host allowlist, TLS fail-closed startup, machine-local
@@ -71,8 +74,8 @@ secret-bearing proof-of-concept material publicly. Prefer the advisory flow over
 public issues for anything security-related.
 
 The threat model with assets, attackers, implemented controls and residual risks is in
-[docs/threat-model.md](docs/threat-model.md). Security findings should map to a threat
-and an asset and must be reproducible without touching the owner's live devices.
+[docs/threat-model.md](docs/threat-model.md). Security findings should map to
+a threat and an asset and must be reproducible without touching the owner's live devices.
 
 ## Required pre-release security work
 
@@ -92,16 +95,18 @@ implemented controls and passing tests; they are not a guarantee:
 
 Remaining known gaps in the published runtime: tokens are static shared secrets
 with client-side logout only (rotate with the procedure above), the
-certificate is self-signed (trust rests on the fingerprint comparison), the
-login throttle is per peer IP with a 5-minute window (expired entries are
-pruned on each sign-in attempt), and
-the deployment on the real S25 has not been exercised with the on-device
-certification script. Track these in issues before any production claim.
+certificate is self-signed (trust rests on the fingerprint comparison), and
+the login throttle is per peer IP with a 5-minute window (expired entries are
+pruned on each sign-in attempt). The on-device certification has been
+exercised on the S25 (2026-11-06, 20/20 PASS); long-duration soak testing
+and reboot recovery remain unmeasured. Track remaining gaps in issues before
+any production claim.
 
 ## Release-candidate hardening status
 
 The branch `executable-release-candidate` (merged to `main`) packages the hardened
-runtime described above. Its controls have automated tests and completed an
-independent security review but have **not** been exercised on the prototype phone
-yet. They do not make the system "impenetrable"; they reduce specific documented
-risks. See [runtime release candidate](docs/runtime-release-candidate.md).
+runtime described above. Its controls have automated tests, completed an
+independent security review, and were exercised on the real S25 during the
+on-device certification (2026-11-06, 20/20 PASS). They do not make the system
+"impenetrable"; they reduce specific documented risks. See
+[runtime release candidate](docs/runtime-release-candidate.md).
