@@ -39,14 +39,14 @@ jobs:
               runtime/termux/dex.sh \
               runtime/termux/install.sh \
               runtime/termux/scrcpy-phone.sh \
-              runtime/terminux/route-input.sh \
-              runtime/termux/jvm \
-              runtime/termux/native \
-              runtime/termux/tools \
-              runtime/termux/find-adb-port.py \
+              runtime/termux/route-input.sh \
               runtime/termux/start_phone.sh \
               runtime/termux/watchdog.sh \
               runtime/termux/update-network.sh \
+              runtime/termux/find-adb-port.py \
+              runtime/termux/jvm \
+              runtime/termux/native \
+              runtime/termux/tools \
               runtime/termux/VERSION \
               runtime/termux/requirements.txt \
               runtime/termux/shortcuts \
