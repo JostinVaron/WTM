@@ -22,9 +22,13 @@ jobs:
         working-directory: runtime/termux
         run: python -m unittest tests.test_server_security tests.test_server_live -v
 
+- name: Run HEVC bitstream helper suite
+        working-directory: runtime/termux
+        run: python -m unittest tests.test_hevc -v
+
       - name: Compile-check Python sources
         working-directory: runtime/termux
-        run: python -m py_compile server.py find-adb-port.py tests/test_server_security.py tests/test_server_live.py
+        run: python -m py_compile server.py find-adb-port.py hevc.py tests/test_server_security.py tests/test_server_live.py tests/test_hevc.py
 
       - name: Syntax-check shell scripts
         working-directory: runtime/termux
