@@ -22,15 +22,19 @@ this repository correctly. Read it before writing code or conclusions.
   `runtime/` or with [docs/certification.md](docs/certification.md), the code
   and certification doc win. Cite file paths and line numbers.
 - **Do not claim things the repo does not claim.** The project does not
-  guarantee 2K60, 20 ms, "impenetrable" security, or hardware certification.
-  The on-device certification ([runtime/termux/tests/device-smoke.sh](runtime/termux/tests/device-smoke.sh))
-  is **pending**, not done.
+  guarantee 2K60, 20 ms, "impenetrable" security, or hardware certification
+  beyond the completed on-device run. The on-device certification
+  ([runtime/termux/tests/device-smoke.sh](runtime/termux/tests/device-smoke.sh))
+  was **completed on the S25 on 2026-11-06 (20/20 PASS, hardened v0.1.2)**; it
+  covers only the tested pair, not arbitrary devices.
 - **Never fabricate evidence.** If you did not run a test or read a file, say
   so. Distinguish "documented", "tested", and "assumed".
-- Distinguish the two runtimes: the **deployed prototype** (unauthenticated,
+- Distinguish the two runtimes: the **deployed prototype** (pre-hardening,
   described in SECURITY.md) and the **published hardened runtime**
   (`runtime/termux/server.py`). Findings about one do not automatically apply
-  to the other.
+  to the other. Note: on 2026-11-06 the S25 was migrated to the hardened
+  v0.1.2 runtime and passed the on-device certification, so the
+  pre-hardening prototype description is historical context.
 
 ## 3. Working with the code
 

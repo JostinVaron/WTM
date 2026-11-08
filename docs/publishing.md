@@ -13,8 +13,8 @@ This is a source publication and prototype handoff, not an app release. The repo
 does not include an APK, third-party server binaries, logs, certificates, private keys
 or ADB authorization material. The installer downloads the official scrcpy server
 artifact (pinned SHA-256) and generates all credentials on the device. The runtime has
-host-level automated tests and a completed independent security review, but has not
-been exercised on the real device pair; see
+host-level automated tests, a completed independent security review, and a completed
+on-device certification on the S25 (2026-11-06, 20/20 checks); see
 [certification](certification.md).
 
 The project is licensed: software under [PolyForm Noncommercial 1.0.0](../LICENSE)
@@ -58,6 +58,9 @@ follow-up issues include:
 6. lifecycle/reconnect tests after reboot, force-stop and Wi-Fi changes;
 7. project license and third-party notice review.
 
-There is no GitHub Release. Do not create one until the gates in
-[project governance](project-governance.md) are met. The public documentation snapshot
-is not a downloadable software release.
+GitHub Releases exist and are built automatically from `v*` tags by
+[.github/workflows/release.yml](../.github/workflows/release.yml); the current
+release line is v0.2.x (see [Releases](releases.md) and the
+[release list](https://github.com/JostinVaron/WTM/releases)). Each release is an
+experimental source package — not a downloadable app — and must keep the labels
+and gates in [project governance](project-governance.md).

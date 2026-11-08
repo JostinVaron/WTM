@@ -8,6 +8,31 @@ the scrcpy Android server, relays H.264 through a Python service running nativel
 Termux, and renders it in Chrome on the tablet using WebCodecs. Pointer and keyboard
 events travel in the reverse direction.
 
+## Quick start
+
+Tested pair: Samsung Galaxy S25 (source phone, Termux + Wireless Debugging) and Galaxy
+Tab S6 Lite (viewer, Chrome). The package is a source installer — there is no APK.
+
+```sh
+# 1. On the source phone, in Termux:
+curl -L -o wtm.tar.gz \
+  https://github.com/JostinVaron/WTM/releases/download/v0.2.1/wtm-runtime-0.2.1.tar.gz
+tar -xzf wtm.tar.gz
+cd wtm-runtime-0.2.1/runtime/termux
+bash install.sh        # installs packages, verifies the scrcpy server, generates tokens
+
+# 2. Start the bridge (Termux:Widget "start-dex" shortcut, or):
+bash ~/.shortcuts/start-dex.sh
+
+# 3. On the tablet, open Chrome at the URL printed by install.sh and
+#    compare the certificate fingerprint with the one printed on install
+#    BEFORE entering any token.
+```
+
+Full walkthrough: [deployment guide](docs/deployment-termux.md) · what a release
+contains: [releases](docs/releases.md) · verified evidence:
+[certification](docs/certification.md).
+
 > **Project status: experimental, device-specific prototype with a published,
 > tested runtime.** The repository includes the hardened Termux runtime under
 > [runtime/termux/](runtime/termux/) with an installer, automated tests and a
@@ -15,8 +40,9 @@ events travel in the reverse direction.
 > supported device matrix, or verified 60 FPS guarantee. The on-device
 > certification on the S25 was completed on 2026-11-06 (20/20 device checks, live browser session); see [certification](docs/certification.md). The production path requires
 > Termux and Wireless ADB.
-> The prototype currently deployed on the owner's phone predates the hardening
-> published here and is not identical to it; see [SECURITY.md](SECURITY.md).
+> The pre-hardening prototype that used to run on the owner's phone predates the
+> hardening published here; the S25 has since been migrated to the hardened
+> runtime (v0.1.2, certified 2026-11-06) — see [SECURITY.md](SECURITY.md).
 
 ## What is currently demonstrated
 
@@ -137,9 +163,9 @@ is not used for video.
    use a keyboard task-switcher shortcut or relaunching apps.
 8. **Tablet input is touch-and-injection; the phone-paired physical mouse is routed
    natively when available.** Touch on the tablet streams touch events through the
-   browser session into the scrcpy control socket; pointer events (mouse paired to the
-   tablet, or touchpad) are injected with `POINTER_ID_MOUSE` and show a cursor in the
-   virtual display. For a Bluetooth mouse paired with the **phone**, the runtime's
+   browser session into the scrcpy control socket; pointer events (mouse paired to
+   the tablet, or touchpad) are injected with `POINTER_ID_MOUSE` and show a cursor in
+   the virtual display. For a Bluetooth mouse paired with the **phone**, the runtime's
    primary path is the native input-device association
    (`route-input.sh` + `jvm/InputAssoc`/`InputFocus` via `app_process`, calling the
    Android 14+ hidden `IInputManager.addUniqueIdAssociationByDescriptor` /
@@ -170,7 +196,7 @@ See [licensing](LICENSING.md) and third-party notices in
 ## Repository status
 
 - Public repository: [JostinVaron/WTM](https://github.com/JostinVaron/WTM)
-- Version: **v0.2.0** — published runtime, source-only (see
+- Version: **v0.2.1** — published runtime, source-only (see
   [Releases](https://github.com/JostinVaron/WTM/releases))
 - License: software [PolyForm Noncommercial 1.0.0](LICENSE), documentation
   [CC BY-NC 4.0](LICENSE-docs.txt) — see [Licensing](LICENSING.md)

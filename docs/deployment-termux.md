@@ -1,12 +1,14 @@
 # Current prototype deployment: Termux + Wireless ADB
 
 This procedure describes the existing prototype, not a one-click installer or a
-Termux-independent product. It assumes the project has been installed manually in
+Termux-independent product. It assumes the project has been installed in
 `$HOME/dex` on the source phone.
 
-The hardened runtime and its installer live in `runtime/termux/` on `main`; they
-are **published but not deployed** on the prototype phone. See
-[runtime release candidate](runtime-release-candidate.md) for what changed.
+The hardened runtime and its installer live in `runtime/termux/` on `main`.
+**The S25 was migrated to the hardened runtime (v0.1.2) on 2026-11-06 and passed
+the on-device certification (20/20 checks).** See
+[runtime release candidate](runtime-release-candidate.md) for what changed
+and [certification](certification.md) for the evidence.
 
 ## Important: two deployment paths
 
@@ -15,14 +17,15 @@ are **published but not deployed** on the prototype phone. See
 repository: it installs Termux packages, copies the sources, downloads the
 official scrcpy server v5.0.1 with a pinned SHA-256, generates per-install
 tokens and TLS material, and installs Termux:Widget/Termux:Boot hooks. This
-path is new, has host-level automated tests and a completed security review,
-but has not been executed on the S25 yet.
+path has host-level automated tests, a completed security review, and — since
+2026-11-06 — a completed on-device certification on the S25 (v0.1.2, 20/20
+checks including a live browser session).
 
-**Path B — deployed prototype.** The service currently running on the S25 was
-installed manually before the installer existed. It remains unauthenticated
-(no login, no Origin/Host checks) and is described below as the prototype.
-The prototype will not gain the hardened behavior until it is reinstalled or
-migrated with Path A.
+**Path B — historical pre-hardening prototype.** The service that ran on the
+S25 before 2026-11-06 was installed manually before the installer existed. It
+was unauthenticated (no login, no Origin/Host checks) and is described below
+as historical context. **This prototype has been superseded on the S25 by the
+hardened runtime via Path A.**
 
 ## Prerequisites
 
@@ -63,8 +66,9 @@ The equivalent current bridge page is:
 https://<S25-LAN-IP>:8443/
 ```
 
-The installed prototype uses a self-signed certificate. The certificate warning is not
-a production trust model; do not disable certificate validation globally.
+The installed runtime uses a self-signed certificate with a published SHA-256
+fingerprint. The certificate warning is not a production trust model; verify the
+fingerprint as described below and do not disable certificate validation globally.
 
 ## Stop
 
@@ -126,7 +130,7 @@ client/source metrics.
 Do not claim restart-proof behavior unless each case is exercised and measured on the
 published support matrix.
 
-## Published installer (source, not yet hardware-certified)
+## Published installer (source, hardware-certified on the S25)
 
 `runtime/termux/install.sh` is an idempotent Termux installer that:
 
@@ -155,7 +159,7 @@ When the phone changes network/IP, run `bash update-network.sh` in `$HOME/dex` t
 refresh the listener bind and regenerate the certificate for the new IP, then verify
 the new fingerprint on the tablet.
 
-This installer flow has host-level automated tests and a completed security review,
-but has not been executed on the real device pair yet; run
-`bash tests/device-smoke.sh` in `$HOME/dex` after installing to certify the hardware.
-See [certification](certification.md).
+This installer flow has host-level automated tests, a completed security review, and
+has been executed on the real device pair: the S25 was installed with v0.1.2 on
+2026-11-06 and passed `bash tests/device-smoke.sh` 20/20, including a live browser
+session. See [certification](certification.md).
