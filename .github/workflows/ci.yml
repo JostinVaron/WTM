@@ -22,7 +22,7 @@ jobs:
         working-directory: runtime/termux
         run: python -m unittest tests.test_server_security tests.test_server_live -v
 
-- name: Run HEVC bitstream helper suite
+      - name: Run HEVC bitstream helper suite
         working-directory: runtime/termux
         run: python -m unittest tests.test_hevc -v
 
