@@ -35,8 +35,22 @@ hardened runtime via Path A.**
 3. ADB, Python and `aiohttp` are installed in Termux.
 4. The scrcpy 5.0.1 server artifact is present at the project path and its redistribution
    terms have been checked.
-5. The S25's Developer Options and Wireless Debugging are enabled. Pair the ADB client
-   once with the Android pairing flow; do not publish pairing keys.
+5. **ADB reachable from Termux is mandatory** — adb is the only rootless mechanism Android
+   provides to create the virtual display and launch the scrcpy server. Two modes are
+   supported:
+   - **adbd TCP mode on the fixed port 5555** (`adb tcpip 5555`, seeded once over USB or
+     from an existing ADB session): stable address and port, but **it does not survive
+     phone reboots** and must be re-seeded after every reboot (see the post-reboot
+     runbook below).
+   - **Wireless Debugging** (Developer Options): the toggle persists across reboots, but
+     the listening port is random per boot; `runtime/termux/find-adb-port.py` discovers
+     it automatically. Pair the ADB client once with the Android pairing flow; do not
+     publish pairing keys. On the tested One UI build this toggle turns itself off when
+     Wi-Fi client connectivity drops, so it is unreliable while the phone hosts the
+     hotspot.
+   Either way, after every source-phone reboot exactly one manual step is currently
+   unavoidable without root: re-seed the fixed port (USB) or re-enable the Wireless
+   Debugging toggle. Tracked in [issue #15](https://github.com/JostinVaron/WTM/issues/15).
 6. Termux:Widget is installed and the shortcut scripts are executable. Termux:Boot is
    optional and must be configured separately.
 7. The tablet has Chrome with WebCodecs and can reach the phone's relay IP/port.
@@ -60,6 +74,17 @@ bash ./dex.sh
 ensures the relay is listening, waits for three consecutive readiness checks and attempts
 to route pointer input.
 
+### Current production encoder configuration
+
+Since the 2026-11-09 bitrate ladder (see [codec study](hevc-study.md) and
+[performance evidence](performance.md)), the shipped configuration is hardware
+**HEVC (H.265) at 35 Mbps CBR** with `i-frame-interval=1`, 2000x1200 @ 60 fps.
+Measured evidence: at 70 Mbps the viewer's hardware decoder saturated on complex 4K60
+content (sustained decode_ms 165-281 ms against a 16.7 ms/frame budget); at 35 Mbps
+decode stayed in budget (18-22 ms) with no perceived quality loss on the viewer panel,
+and the link sustained ~68 Mbps with rtt 3-5 ms. H.264 remains the documented rollback
+(`VIDEO_CODEC=h264`).
+
 The equivalent current bridge page is:
 
 ```text
@@ -82,6 +107,58 @@ It marks the watchdog as intentionally stopped, removes the ADB forward, termina
 scrcpy display process where reachable, stops the relay and releases the wake lock.
 Verify that `/api/status` no longer responds and no scrcpy virtual display remains.
 
+## Post-reboot recovery runbook (ADB does not survive reboots)
+
+`adb tcpip 5555` — the fixed-port adbd TCP mode this deployment uses — **does not
+survive phone reboots**: Android reverts adbd to USB mode on every boot. The Wireless
+Debugging toggle does not solve it by itself: One UI turns it off when Wi-Fi client
+connectivity drops, and its listening port is random per boot. Incident evidence and
+the automation plan are tracked in
+[issue #15](https://github.com/JostinVaron/WTM/issues/15).
+
+Failure cascade when this bites (observed 2026-11-09): reboot → adbd back in USB
+mode → no ADB device → scrcpy server never starts → relay never starts → no
+`rd-bridge.log`, no `healthz` response, viewer black/dead. The widget toast only says
+the start failed; the explicit reason is in `$PREFIX/tmp/rd-start.log`.
+
+After every source-phone reboot, exactly **one manual step** is currently unavoidable
+without root (adb is the only rootless mechanism to create the virtual display).
+Choose either route:
+
+**Route A — re-seed the fixed port (USB cable, ~2 minutes):**
+
+```sh
+# from any PC with adb, phone connected over USB:
+adb tcpip 5555
+# unplug; back on the phone tap the start widget — or, if the Termux:Boot
+# watchdog is running, recovery is automatic within ~10 s
+```
+
+**Route B — Wireless Debugging toggle (no cable; requires Wi-Fi client
+connectivity, so it is unreliable while the phone hosts the hotspot):**
+
+```text
+Developer Options → enable Wireless Debugging (pairing is one-time)
+```
+
+Then tap the start widget: `find-adb-port.py` discovers the per-boot port and
+`dex.sh` connects automatically. The watchdog performs the same discovery every
+10 s, so with the toggle on, recovery is hands-off after the toggle itself.
+
+**Diagnostics after a failed start (in order):**
+
+```sh
+adb devices -l                        # empty → ADB is the broken link
+adb connect 127.0.0.1:5555            # refused → adbd not in TCP mode
+tail -n 40 $PREFIX/tmp/rd-start.log   # explicit abort reason
+adb shell "ip -4 addr show swlan0"    # hotspot IP changed → update-network.sh
+```
+
+Only after ADB is back do the remaining checks make sense: `healthz` on the
+configured bind host and the phone-side scrcpy log. If the hotspot IP changed
+with the reboot, run `bash update-network.sh` before starting, and re-verify
+the new certificate fingerprint on the tablet.
+
 ## Boot and recovery behavior
 
 `$HOME/.termux/boot/01-dex.sh` attempts to obtain a wake lock and start
@@ -91,6 +168,7 @@ available.
 
 This is best-effort recovery. It cannot:
 
+- re-seed adbd TCP mode after a phone reboot (see the post-reboot runbook above);
 - turn Wireless Debugging on after Android disables it;
 - accept a new pairing request or user consent;
 - guarantee the current connect port is discoverable;
@@ -119,6 +197,8 @@ client/source metrics.
 
 ## Known interruption cases
 
+- Source phone rebooted: adbd reverts to USB mode and the fixed TCP port dies; see the
+  post-reboot runbook above.
 - Wireless Debugging disabled or port changed.
 - ADB authorization revoked.
 - Termux force-stopped, reclaimed, updated or battery-restricted.

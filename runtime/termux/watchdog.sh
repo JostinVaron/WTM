@@ -33,7 +33,11 @@ while true; do
   fi
   if ! phone_adb >/dev/null 2>&1; then
     FOUND=$(python3 find-adb-port.py 2>/dev/null || true)
-    for p in $FOUND; do "$ADB" connect "127.0.0.1:$p" >/dev/null 2>&1 && log "adb conectado $p"; done
+    # find-adb-port.py imprime "host:port" (p.ej. 127.0.0.1:5555) y se pasa
+    # tal cual a "adb connect". Antes se anteponía "127.0.0.1:" al resultado
+    # completo, lo que producía direcciones inválidas y rompía la recuperación
+    # automática post-reinicio (issue #15).
+    for p in $FOUND; do "$ADB" connect "$p" >/dev/null 2>&1 && log "adb conectado $p"; done
   fi
   if phone_adb >/dev/null 2>&1; then
     if ! bridge_up; then
