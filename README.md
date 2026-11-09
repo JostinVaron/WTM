@@ -4,7 +4,7 @@
 
 WTM is the project name for a tested S25-to-Galaxy Tab S6 Lite workflow. It creates a
 2000 x 1200 Android virtual display on the phone, captures and encodes that display with
-the scrcpy Android server, relays H.264 or H.265 (HEVC) through a Python service running natively in
+the scrcpy Android server, relays H.264 (or H.265/HEVC when selected) through a Python service running natively in
 Termux, and renders it in Chrome on the tablet using WebCodecs. Pointer and keyboard
 events travel in the reverse direction.
 
@@ -49,8 +49,8 @@ contains: [releases](docs/releases.md) · verified evidence:
 - The test pair is a Samsung Galaxy S25 (`SM-S931B`, Android 16 / API 36) and Galaxy Tab
   S6 Lite Wi-Fi (`SM-P613`, Android 14 / API 34).
 - The phone's scrcpy virtual display is configured as 2000 x 1200 at 60 Hz. The
-  encoder is configured for H.264 (default; HEVC selectable via `VIDEO_CODEC=h265`),
-  a 12 Mbps target and a maximum of 60 FPS.
+  encoder is configured for H.264 by default (HEVC selectable via `VIDEO_CODEC=h265` in
+  `server.env`), a 12 Mbps target and a maximum of 60 FPS.
 - Short, relatively simple motion tests reached about 57.6-60 decoded FPS in Chrome, with
   measured mean capture-to-decoder latency around 23-26 ms and no client drops in some
   five-second windows.
@@ -66,10 +66,11 @@ contains: [releases](docs/releases.md) · verified evidence:
   display only — no ghost input on the phone screen, with the real Samsung cursor.
   See [bluetooth-mouse-routing.md](docs/bluetooth-mouse-routing.md).
 - HEVC decoding capability on the tablet was probed and confirmed (2026-11-08, Chrome
-  156), and the H.264-vs-HEVC A/B was then **measured on real hardware
-  (2026-11-09)**: for the tested content class, HEVC decodes ~30% faster with ~3x
-  lower jitter peaks and zero sustained drops; the shipped default remains H.264
-  pending the full acceptance run. See [hevc-study.md §7](docs/hevc-study.md).
+  156), and the H.264-vs-HEVC A/B was then **measured on this pair (2026-11-09)**:
+  for the tested content class, HEVC decoded ~30% faster with ~3x lower jitter peaks
+  and zero sustained drops. The shipped default remains H.264 pending the full
+  acceptance run; the measured evidence and caveats are in
+  [hevc-study.md §7](docs/hevc-study.md).
 
 Measurements are conditional on scene complexity, Wi-Fi, device temperature, foreground
 state, browser behavior, and battery/thermal management. See
@@ -84,7 +85,7 @@ S25 Android virtual display (2000 x 1200)
         ├─ scrcpy-server 5.0.1 / Android MediaCodec / H.264 (default) or HEVC
         │  abstract video + control sockets
         ▼
-Termux ADB local forward (TCP 1477)
+Termux ADB local forward (TCP 1234)
         ▼
 Python 3 + aiohttp relay in Termux (HTTPS 8443, WebSocket)
         │
@@ -103,11 +104,11 @@ is not used for video.
 ## Documentation
 
 - [Architecture and lifecycle](docs/architecture.md)
-- [Dependencies and installation inventory](docs/dependency-inventory.md)
+- [Dependencies and installation inventory](docs/dependencies.md)
 - [Hardware, operating-system, and network requirements](docs/requirements.md)
 - [Performance measurements and acceptance criteria](docs/performance.md)
 - [Performance and optimization backlog](docs/optimization.md)
-- [Codec study: H.264 vs H.265/HEVC (probe measured)](docs/hevc-study.md)
+- [Codec study: H.264 vs H.265/HEVC (probe + measured A/B)](docs/hevc-study.md)
 - [Current Termux deployment and reproduction guide](docs/deployment-termux.md)
 - [Runtime release candidate](docs/runtime-release-candidate.md)
 - [Bluetooth mouse routing (historical subsystem)](docs/bluetooth-mouse-routing.md)
@@ -120,11 +121,11 @@ is not used for video.
 - [Instructions for AI assistants](AGENTS.md)
 - [Issue, milestone, and release policy](docs/project-governance.md)
 - [GitHub publication/authentication](docs/publishing.md)
-- [Contribution guide](COMMIT.md)
+- [Contribution guide](CONTRIBUTING.md)
 
 ## Important limitations
 
-1. **Termux is in the runtime path.** The relay, local ADB directory/forward, logs, launcher,
+1. **Termux is in the runtime path.** The relay, local ADB server/forward, logs, launcher,
    and watchdog are Termux processes. Force-stopping Termux or Android killing it can
    interrupt the stream. `nohup` and a wake lock do not make a process an Android system
    service.
@@ -146,15 +147,16 @@ is not used for video.
    (26/26 passing) plus a completed independent security review and the completed
    on-device certification. This is a source-available prototype, not a Play-Store
    style product. See [certification](docs/certification.md).
-6. **The tablet browser must support WebCodecs.** The web client decodes H.264
+6. **The tablet browser must support WebCodecs.** The web client decodes video
    exclusively via the WebCodecs API (`VideoDecoder`) — there is no MSE or
    `<video>` fallback. **Chrome (or another Chromium-based browser with WebCodecs
    enabled) is required; Firefox does not support WebCodecs H.264 decoding and shows a
    black screen with `0 fps, 0.0 Mbps` and the `sin WebCodecs` overlay note.** On a
-   Galaxy Tab S6 Lite, updated Chrome works; keep the tablet's Chrome up to date. Note:
-   HEVC decode on Android/Chrome is hardware-only (no software fallback exists), so
-   the HEVC path additionally requires a platform HEVC decoder — confirmed present on
-   the tested tablet by the 2026-11-08 probe.
+   Galaxy Tab S6 Lite, updated Chrome works; keep the tablet's Chrome up to date.
+   The HEVC path has an additional constraint: on Android, Chrome exposes HEVC only
+   through platform (hardware) decoders — there is no software fallback — so the HEVC
+   option additionally requires a hardware HEVC decoder (confirmed present on the
+   tested tablet by the 2026-11-08 probe; see [hevc-study.md](docs/hevc-study.md)).
 7. **The virtual display starts empty (black), and vendor launchers may refuse to run
    on it.** An Android virtual display is created blank. The runtime launcher script
    starts the HOME intent on the newly created display; on Samsung One UI the stock
@@ -171,7 +173,7 @@ is not used for video.
    the tablet, or touchpad) are injected with `POINTER_ID_MOUSE` and show a cursor in
    the virtual display. For a Bluetooth mouse paired with the **phone**, the runtime's
    primary path is the native input-device association
-   (`route-input.sh` + `jvm/InputAssoc`/`JVM InputFocus` via `app_process`, calling the
+   (`route-input.sh` + `jvm/InputAssoc`/`InputFocus` via `app_process`, calling the
    Android 14+ hidden `IInputManager.addUniqueIdAssociationByDescriptor` /
    `setDisplayIdForPointerIcon`): Android itself re-targets the mouse to the virtual
    display, so there is no ghost input on the phone screen and the real system cursor
@@ -207,12 +209,15 @@ See [licensing](LICENSING.md) and third-party notices in
 - Supported installations: **none formally**
 - Latest tested configuration: **S25 + Tab S6 Lite, 2000 x 1200 / configured 60 FPS**
 - Downloadable app: **not available**; source-only Termux installer in `runtime/termux/`
-- Automated tests: 44/44 passing (host: 26 security/live + 18 HEVC), independent security review completed
+- Automated tests: 26/26 security/live suites passing (host), plus the 18-test HEVC
+  bitstream suite (18/18 verified on-device in Termux, S25; CI integration pending —
+  see the HEVC workflows note in [optimization.md](docs/optimization.md)); independent
+  security review completed
 - On-device certification: **completed 2026-11-06, 20/20 PASS** (see [certification](docs/certification.md))
 - CI: `.github/workflows/ci.yml`; releases: `.github/workflows/release.yml`
 - Public issue templates: available in `.github/ISSUE_TEMPLATE/`
 - Release artifacts: source packages under
-  [Releases](https://github.com/JostinVarAon/WTM/releases), built from `v*` tags
+  [Releases](https://github.com/JostinVaron/WTM/releases), built from `v*` tags
 
 See [Project governance](docs/project-governance.md) for what must be completed before
 creating a public release.
