@@ -16,11 +16,12 @@ FPS="${FPS:-60}"
 SCID="${SCID:-7777}"
 SCRCPY_PORT="${SCRCPY_PORT:-1234}"
 
-# Codec de vídeo del encoder (issue #4, docs/hevc-study.md): h264 sigue
-# siendo el DEFAULT; h265 activa el codificador HEVC del S25 para el
-# experimento A/B medido. El relay detecta el codec de los NAL que llegan
-# (VPS/SPS/PPS HEVC vs SPS/PPS AVC) — no hay que tocar server.py para probar.
-VIDEO_CODEC="${VIDEO_CODEC:-h264}"
+# Codec de vídeo del encoder (issue #4, docs/hevc-study.md): desde v0.3.0 el
+# DEFAULT es h265 (HEVC) — ganador del A/B medido (2026-11-09, §7) y validado
+# en sesión larga de producción en este par. VIDEO_CODEC=h264 en server.env
+# restaura el camino AVC. El relay detecta el codec de los NAL que llegan
+# (VPS/SPS/PPS HEVC vs SPS/PPS AVC) sin configuración adicional.
+VIDEO_CODEC="${VIDEO_CODEC:-h265}"
 
 # Mouse UHID (OPTATIVO, experimental): con MOUSE_MODE=uhid el server crea un
 # mouse virtual UHID asociado al display virtual (scrcpy >=3.3, permiso
@@ -102,8 +103,8 @@ if [ -n "$MOUSE_MODE" ] && [ "$MOUSE_MODE" != "inject" ]; then
   log "mouse: ${MOUSE_MODE} (experimental; el mouse físico del teléfono se enruta aparte con mouse-route.py)"
 fi
 case "$VIDEO_CODEC" in
-  h264) CODEC_OPT="" ;;                    # default de scrcpy: se omite el flag
-  h265) CODEC_OPT="video_codec=h265"; log "codec HEVC (experimento A/B, issue #4)" ;;
+  h264) CODEC_OPT="video_codec=h264" ;;   # opt-out explícito (default h265 desde v0.3.0)
+  h265) CODEC_OPT="video_codec=h265" ;;   # DEFAULT desde v0.3.0 (issue #4)
   *)    log "VIDEO_CODEC inválido: '$VIDEO_CODEC' (usa h264 o h265)"; exit 1 ;;
 esac
 log "arrancando scrcpy-server (${MAX_SIZE}px, ${BITRATE} bps, ${FPS}fps${NEW_DISPLAY:+", display virtual ${NEW_DISPLAY}"}, codec ${VIDEO_CODEC})..."
