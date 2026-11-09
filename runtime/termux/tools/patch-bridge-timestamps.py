@@ -55,11 +55,18 @@ PRINT_REPLACEMENTS = [
     ("client log",
      '''    print("[client] " + text, flush=True)''',
      '''    log("[client] " + text)'''),
+    ("server cannot raise priority",
+     '''        print(f"[server] cannot raise priority: {e}", flush=True)''',
+     '''        log(f"[server] cannot raise priority: {e}")'''),
+    ("server priority",
+     '''        print(f"[server] priority {prio} applied to server and Xvfb {DISPLAY} ({len(pids)} pid)", flush=True)''',
+     '''        log(f"[server] priority {prio} applied to server and Xvfb {DISPLAY} ({len(pids)} pid)")'''),
     ("server banner",
      '''    print(
         f"[server] {DISPLAY} {W}x{H}@{FPS} crf={CRF} preset={PRESET} "
         f"on https://{bind_host}:{PORT}",
-        flush=True)''',
+        flush=True,
+    )''',
      '''    log(f"[server] {DISPLAY} {W}x{H}@{FPS} crf={CRF} preset={PRESET} "
         f"on https://{bind_host}:{PORT}")'''),
     ("server backend",
@@ -68,9 +75,6 @@ PRINT_REPLACEMENTS = [
     ("server cleanup",
      '''            print(f"[server] cleanup: {task_key} ended with {exc!r}", flush=True)''',
      '''            log(f"[server] cleanup: {task_key} ended with {exc!r}")'''),
-    ("server priority",
-     '''    print(f"[server] priority -12 applied to server and Xvfb {DISPLAY} (0 pid)", flush=True)''',
-     '''    log(f"[server] priority -12 applied to server and Xvfb {DISPLAY} (0 pid)")'''),
 ]
 
 
