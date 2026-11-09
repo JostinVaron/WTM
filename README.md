@@ -23,9 +23,9 @@ supported; it was the measured bottleneck in the reference network.
 ```sh
 # 1. On the source phone, in Termux:
 curl -L -o wtm.tar.gz \
-  https://github.com/JostinVaron/WTM/releases/download/v0.3.0/wtm-runtime-0.3.0.tar.gz
+  https://github.com/JostinVaron/WTM/releases/download/v0.3.1/wtm-runtime-0.3.1.tar.gz
 tar -xzf wtm.tar.gz
-cd wtm-runtime-0.3.0/runtime/termux
+cd wtm-runtime-0.3.1/runtime/termux
 bash install.sh        # installs packages, verifies the scrcpy server, generates tokens
 
 # 2. Start the bridge (Termux:Widget "start-dex" shortcut, or):
@@ -199,14 +199,17 @@ hotspot or Wi-Fi; Bluetooth is not used for video.
    without exclusivity: the pointer may also move on the phone's physical screen.
    Disable all mouse routing with `MOUSE_ROUTE=0` in `server.env`. See
    [bluetooth-mouse-routing.md](docs/bluetooth-mouse-routing.md).
-9. **Hotspot + mobile data changes the addressing model.** With the phone's hotspot
-   active and mobile data on, the phone has multiple interfaces (`swlan0` for the
-   hotspot, `rmnet` for data) and One UI assigns hotspot clients a variable `10.x.x.x`
-   subnet that can differ every session. The installer and `update-network.sh` detect
-   the hotspot interface (`swlan0`) first; never hardcode the phone's hotspot address.
-   The hotspot path was verified working on 2026-11-09, but hotspot client
-   isolation, DHCP lease behavior, and battery cost of a sustained AP role are not
-   characterized.
+9. **Hotspot + Wi-Fi + mobile data changes the addressing model.** With the phone's
+   hotspot active alongside other networks, the phone has multiple interfaces with
+   IPs (`swlan0` for the hotspot, `wlan0` for Wi-Fi, `rmnet` for data), and the
+   Termux `ip` binary cannot read interface addresses on modern Android (netlink is
+   restricted for apps) — so the installer and `update-network.sh` detect interfaces
+   through the adb loopback connection (`adb shell ip`), preferring the hotspot
+   interface (`swlan0`) first. Never hardcode the phone's hotspot address; when in
+   doubt, pass it explicitly with `WTM_ALLOWED_HOSTS` (install) or as an argument
+   (`update-network.sh 10.x.x.x`). The hotspot path was verified working on
+   2026-11-09, but hotspot client isolation, DHCP lease behavior, and battery cost
+   of a sustained AP role are not characterized.
 
 ## Hardware requirements: what we can and cannot claim
 
@@ -224,7 +227,7 @@ See [licensing](LICENSING.md) and third-party notices in
 ## Repository status
 
 - Public repository: [JostinVaron/WTM](https://github.com/JostinVaron/WTM)
-- Version: **v0.3.0** — published runtime, source-only (see
+- Version: **v0.3.1** — published runtime, source-only (see
   [Releases](https://github.com/JostinVaron/WTM/releases))
 - License: software [PolyForm Noncommercial 1.0.0](LICENSE), documentation
   [CC BY-NC 4.0](LICENSE-docs.txt) — see [Licensing](LICENSING.md)
