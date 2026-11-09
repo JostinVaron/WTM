@@ -2,6 +2,20 @@
 # update-network.sh — re-detect the LAN IP and refresh the listener config.
 # Útil cuando el teléfono cambia de red/IP (DHCP, hotspot, otra casa): el
 # servidor escucha solo en la IP configurada en la instalación.
+#
+# Detección de IP (orden de prioridad, hallazgo de campo 2026-11-09):
+#   1) Argumento explícito ($1) — siempre gana.
+#   2) swlan0 (hotspot) vía `adb shell ip` — el usuario shell de Android SÍ
+#      puede leer netlink; el `ip` de Termux falla con "Permission denied"
+#      en Android moderno, así que la consulta se hace a través de adbd.
+#      swlan0 se consulta ANTES que wlan0: en la arquitectura oficial del
+#      proyecto (hotspot como transporte), un teléfono con hotspot activo
+#      y Wi-Fi de casa conectado a la vez tiene AMBAS interfaces con IP,
+#      y la del hotspot es la que debe usar el servicio.
+#   3) wlan0 (Wi-Fi normal) vía `adb shell ip`.
+#   4) Fallback UDP de Termux (ruta por defecto) — ÚLTIMO recurso: con
+#      hotspot + Wi-Fi + datos activos devuelve la IP de la ruta por
+#      defecto (Wi-Fi de casa / datos móviles), no la del hotspot.
 set -euo pipefail
 
 export PATH=/data/data/com.termux/files/usr/bin:/system/bin:/system/xbin
@@ -9,18 +23,39 @@ export HOME=/data/data/com.termux/files/home
 export PREFIX=/data/data/com.termux/files/usr
 
 CONFIG="$HOME/.config/wtm/server.env"
+ADB="$PREFIX/bin/adb"
+LOOPBACK_SERIAL="127.0.0.1:5555"
 log(){ printf '[wtm-network] %s %s\n' "$(date '+%F %T')" "$*"; }
 
 [ -f "$CONFIG" ] || { log "No existe $CONFIG; ejecuta install.sh primero."; exit 1; }
 
 NEW_IP="${1:-}"
 if [ -z "$NEW_IP" ]; then
-    NEW_IP="$(ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
-    [ -z "$NEW_IP" ] && NEW_IP="$(ip -4 addr show swlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
+    # swlan0 primero (hotspot = transporte oficial), consultado vía adb shell
+    # porque el `ip` de Termux no tiene permiso de netlink en Android moderno.
+    if "$ADB" devices 2>/dev/null | grep -q "^$LOOPBACK_SERIAL[[:space:]].*device$"; then
+        NEW_IP="$("$ADB" -s "$LOOPBACK_SERIAL" shell "ip -4 addr show swlan0 2>/dev/null" 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
+        [ -z "$NEW_IP" ] && NEW_IP="$("$ADB" -s "$LOOPBACK_SERIAL" shell "ip -4 addr show wlan0 2>/dev/null" 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
+    fi
+    # Último recurso: ruta por defecto (falla la prioridad de hotspot; avisa).
+    if [ -z "$NEW_IP" ]; then
+        NEW_IP="$("$PREFIX/bin/python3" -c 'import socket
+try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("8.8.8.8", 80))
+    ip = s.getsockname()[0]
+    s.close()
+    if ip and not ip.startswith("0.") and ip != "127.0.0.1":
+        print(ip)
+except Exception:
+    pass')"
+        [ -n "$NEW_IP" ] && log "AVISO: IP detectada por el fallback de ruta por defecto ($NEW_IP);"
+        [ -n "$NEW_IP" ] && log "  puede no ser la del hotspot. Pásala explícita: $0 <ip>"
+    fi
 fi
 [ -z "$NEW_IP" ] && { log "No se detectó IP; pásala como argumento: $0 192.168.x.y"; exit 1; }
 
-OLD_IP="$(sed -n 's/^WTM_ALLOWED_HOSTS=//p' "$CONFIG" | tr -d '\r')"
+OLD_IP="$(sed -n 's/^WTM_ALLOWED_HOSTS=//p' "$CONFIG" | head -1 | tr -d '\r')"
 if [ "$OLD_IP" = "$NEW_IP" ]; then
     log "La IP sigue siendo $NEW_IP; no hay cambios."
     exit 0
