@@ -350,6 +350,9 @@ class StreamState:
         self.client_stats = {}     # latest stats reported by the tablet client (parsed from /log)
         self.client_stats_ts = 0.0
         self.scrcpy_connected = False  # True while the scrcpy-server video stream is up
+        self.hevc = False              # HEVC stream detected (VPS NAL): issue #4 A/B path
+        self.hevc_nals = {}            # HEVC NAL types 32/33/34 -> latest VPS/SPS/PPS
+        self.hevc_key = None           # last (VPS, SPS, PPS) tuple that produced a config
 
 
 async def broadcast_text(state, text):
@@ -773,6 +776,43 @@ def sps_dimensions(sps):
         return None
 
 
+try:
+    import hevc  # módulo puro del paquete (copiado junto al server por install.sh)
+except ImportError:
+    hevc = None
+
+
+async def _hevc_maybe_config(state):
+    """Construye y difunde la config HEVC (hvcC) al completar VPS+SPS+PPS (issue #4)."""
+    if hevc is None or not state.hevc:
+        return
+    vps = state.hevc_nals.get(32)
+    sps = state.hevc_nals.get(33)
+    pps = state.hevc_nals.get(34)
+    if not (vps and sps and pps):
+        return
+    key = (vps, sps, pps)
+    if state.hevc_key == key:
+        return
+    state.hevc_key = key
+    info = hevc.parse_hevc_sps(sps)
+    if info is None:
+        print("[hevc] SPS no soportado (multi-sub-layer o truncado); se ignora", flush=True)
+        return
+    codec, hvcc = hevc.build_hevc_config(vps, sps, pps)
+    W2, H2 = info["width"], info["height"]
+    state.scrcpy_w, state.scrcpy_h = W2, H2
+    cfg = {"codec": codec, "description": base64.b64encode(hvcc).decode("ascii"),
+           "width": W2, "height": H2, "fps": FPS}
+    changed = cfg != state.config
+    state.config = cfg
+    state.last_key_frame = None  # el keyframe cacheado era de la config anterior
+    state.need_key.update(state.clients)
+    if changed:
+        print(f"[hevc] config {W2}x{H2} {codec}", flush=True)
+        await broadcast_text(state, json.dumps({"type": "config", **cfg}))
+
+
 async def scrcpy_reader(state):
     """Read a raw Annex-B H.264 stream from scrcpy-server (the whole S25 screen) and
     republish it as AVCC access units over WebSocket to the tablet client."""
@@ -802,6 +842,40 @@ async def scrcpy_reader(state):
                 if not chunk:
                     break
                 for nal in parser.feed(chunk):
+                    # --- Dispatch de codec HEVC (issue #4; inactivo salvo VPS) ---
+                    if len(nal) >= 2 and nal[0] == 0x40 and nal[1] == 0x01:
+                        # VPS HEVC (layer 0, tid+1=1). AVC nunca emite NAL type 0.
+                        if not state.hevc:
+                            state.hevc = True
+                            state.hevc_nals = {}
+                            print("[scrcpy] stream HEVC detectado (VPS)", flush=True)
+                    elif state.hevc and (nal[0] & 0x1F) == 7:
+                        # SPS AVC: el encoder volvió a H.264 (o se reinició).
+                        state.hevc = False
+                        state.hevc_key = None
+                        print("[scrcpy] stream AVC detectado (SPS); parser AVC", flush=True)
+                    if state.hevc:
+                        ht = (nal[0] >> 1) & 0x3F
+                        if ht in (32, 33, 34):  # VPS / SPS / PPS
+                            state.hevc_nals[ht] = nal
+                            await _hevc_maybe_config(state)
+                        elif ht < 32:  # slice VCL: 1 NAL = 1 frame (convención verificada del camino AVC)
+                            if state.config is None:
+                                continue
+                            is_key = ht in (19, 20, 21)  # IDR_W_RADL / IDR_N_LP / CRA
+                            frame = len(nal).to_bytes(4, "big") + nal
+                            if is_key:
+                                state.last_key_frame = frame
+                                n_keys += 1
+                            n_frames += 1
+                            state.got_frame = True
+                            await broadcast_frame(state, frame, is_key,
+                                                  ts_us=int(time.time() * 1e6), proc_us=0)
+                            if time.monotonic() - t_stats >= 5:
+                                print(f"[hevc] {n_frames/(time.monotonic()-t_stats):.1f} fps, "
+                                      f"{n_keys} IDR en {time.monotonic()-t_stats:.1f}s", flush=True)
+                                n_frames = 0; n_keys = 0; t_stats = time.monotonic()
+                        continue  # SEI (39) y demás NAL no-VCL: se ignoran
                     t = nal[0] & 0x1F
                     if t == 7:  # SPS
                         if state.sps != nal:

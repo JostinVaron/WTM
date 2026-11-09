@@ -1,10 +1,12 @@
 # Codec study: H.264 (AVC) vs H.265 (HEVC) for the WTM pipeline
 
-**Status: A/B measured on real hardware (2026-11-09). Evidence-first; the
-shipped default stays H.264 until the full acceptance run says otherwise.**
-This document records what was verified from primary sources on 2026-11-08,
-corrects one claim from a lower-capability AI assistant, defines the decision
-gate for the HEVC experiment, and now records the measured A/B outcome.
+**Status: A/B measured on real hardware (2026-11-09); after the A/B plus a
+long production session on this pair, the shipped default flipped to HEVC in
+v0.3.0 (`VIDEO_CODEC=h264` is the documented rollback).** This document
+records what was verified from primary sources on 2026-11-08, corrects one
+claim from a lower-capability AI assistant, defines the decision gate for
+the HEVC experiment, and records the measured A/B outcome and its
+consequences.
 
 ## 1. What Apple Sidecar actually does (verified)
 
@@ -215,10 +217,12 @@ did not appear in either leg's stable state.
    comparison is valid, but 60 FPS with HEVC is not established.
 2. **No bandwidth-efficiency claim.** Both legs ran at the 12 Mbps cap; the
    HEVC bitrate advantage (same quality at lower Mbps) was not measured.
-3. **One content class, ~60 s/leg, no thermal equilibrium.** This is not the
-   full acceptance run of docs/performance.md. The shipped default stays
-   H.264; the operator of this pair uses `VIDEO_CODEC=h265` in their
-   `server.env` as a documented operator choice backed by this evidence.
+3. **One content class, ~60 s/leg, no thermal equilibrium.** This is not
+   the full acceptance run of docs/performance.md. **Update (2026-11-09,
+   v0.3.0):** after this A/B and a long production session on this pair
+   (fluid, hardware HEVC decode on the tablet, no visible sustained drops),
+   the shipped default flipped to HEVC; `VIDEO_CODEC=h264` in `server.env`
+   is the documented rollback.
 4. **Warm-up drops are real but bounded:** one 5-second window at session
    start. The client's queue-based fallback (decodeQueueSize > 8 for two
    consecutive checks) covers this class of transient.
@@ -231,9 +235,10 @@ did not appear in either leg's stable state.
   the natural next measurement for the bandwidth question.
 - The FPS cap investigation (both legs at ~30 FPS with a 60 cap) is a
   separate pipeline question, tracked in the optimization backlog.
-- Decision record: the default flip to HEVC is gated on the full acceptance
-  run; if it passes, the temporary patch-hevc-relay.py consolidates into
-  server.py and the patch is removed, as planned.
+- Decision record (closed 2026-11-09, v0.3.0): the long production session
+  on this pair validated the HEVC path; the default flipped to HEVC, the
+  temporary patch-hevc-relay.py consolidated into server.py and was removed,
+  and H.264 remains the documented rollback (`VIDEO_CODEC=h264`).
 
 Frozen evidence on the operator device: `legA-h264-bridge.log`,
 `legB-hevc-bridge.log`, reproducible extractor `ab-analyze.py` (parses bridge

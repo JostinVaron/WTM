@@ -49,8 +49,8 @@ The Tab S6 Lite software decoder collapses under detailed/high-motion content
 4. ~~Consider `codec=h265` A/B — decode cost vs. bitrate, tablet permitting.~~
    **Answered (2026-11-09): the measured A/B ran on this pair — HEVC wins
 decode latency (~30% less, 3x lower jitter peaks, zero sustained drops) for
-   the tested content class; the shipped default stays H.264 pending the full
-   acceptance run. Remaining open questions under OPT-2: HEVC-vs-H.264 sweep
+   the tested content class; v0.3.0 made HEVC the shipped default after a long
+   production session validated it on this pair (2026-11-09). Remaining open questions under OPT-2: HEVC-vs-H.264 sweep
    BELOW the 12 Mbps cap (bandwidth efficiency was not measurable at the cap),
    and complex-motion HEVC behavior (the A/B used one content class). See
    hevc-study.md §7 and performance.md (2026-11-09).**
@@ -104,6 +104,8 @@ unidentified. Investigate before any 60 FPS claim.
 - 2026-11-07 — Startup mouse-association retry storm fixed (see OPT-1);
   software decode default and queue-based HW fallback (see performance.md).
 - 2026-11-09 — Measured codec A/B H.264 vs HEVC on this pair: HEVC wins decode
-  latency for the tested content class; default stays H.264 pending the
-  acceptance run. Relay HEVC path merged (issue #4 closed); evidence in
+  latency for the tested content class; the default later flipped to HEVC in v0.3.0. Relay HEVC path merged (issue #4 closed); evidence in
   hevc-study.md §7 and performance.md.
+- 2026-11-09 — v0.3.0: HEVC became the shipped default (measured A/B plus a
+  long production session on this pair); patch-hevc-relay.py was removed after
+  consolidating its patch into server.py. Documented rollback: `VIDEO_CODEC=h264`.
