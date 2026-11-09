@@ -75,11 +75,11 @@ fi
 # Termux está bloqueado por netlink en Android moderno, así que las consultas
 # a swlan0/wlan0 NUNCA matchean desde Termux y el fallback UDP decidía solo.
 # Ese fallback devuelve la IP de la RUTA POR DEFECTO: con Wi-Fi (internet) +
-# hotspot (video) coexistiendo, es la IP del ROUTER, no la del hotspot —
-# el instalador sincronizó 10.206.237.108 -> 192.168.2.5 y la tablet quedó
-# fuera. Fix: consultar las interfaces con 'adb shell ip' (el shell de
-# Android SÍ ve todas), con timeout; respaldo: ip local (Android viejo) y
-# UDP como último recurso con aviso.
+# hotspot (video) coexistiendo, es la IP del ROUTER (192.168.x.y), no la del
+# hotspot (10.x.x.x) — el instalador sincronizó la del hotspot por la del
+# router y la tablet quedó fuera. Fix: consultar las interfaces con
+# 'adb shell ip' (el shell de Android SÍ ve todas), con timeout; respaldo:
+# ip local (Android viejo) y UDP como último recurso con aviso.
 # Orden de prioridad: 1) swlan0 (hotspot One UI) 2) wlan0 (Wi-Fi normal)
 # 3) fallback UDP con aviso explícito. Para forzar una IP: WTM_ALLOWED_HOSTS.
 detect_iface_ip(){
