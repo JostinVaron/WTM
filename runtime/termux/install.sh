@@ -14,6 +14,8 @@
 #  7. Compila native/mouse-grab (EVIOCGRAB: respaldo del enrutado sin fantasma).
 #  8. Copia el subsistema de ASOCIACIÓN NATIVA (route-input.sh + jvm/):
 #     la vía principal del enrutado de mouse (APIs ocultas de InputManager).
+#  9. Parchea server.py con el camino de relay HEVC (issue #4, experimento A/B;
+#     default H.264 intacto; hevc.py se copia junto al server).
 #
 # Es idempotente: nunca sobrescribe tokens, TLS o configuración existentes.
 # No incluye secretos: todo el material sensible se crea en ~/.config/wtm.
@@ -105,6 +107,17 @@ for item in server.py dex.sh scrcpy-phone.sh watchdog.sh find-adb-port.py start_
         log "Copiado $item"
     fi
 done
+# hevc.py: módulo puro del camino HEVC (issue #4). Es OPCIONAL para el default
+# (H.264 no lo importa); si falta, el parche del relay se salta con un aviso y
+# el runtime sigue funcionando exactamente igual en H.264.
+if [ -f "$SOURCE_DIR/hevc.py" ]; then
+    if ! cmp -s "$SOURCE_DIR/hevc.py" "$INSTALL_DIR/hevc.py" 2>/dev/null; then
+        cp "$SOURCE_DIR/hevc.py" "$INSTALL_DIR/hevc.py"
+        log "Copiado hevc.py"
+    fi
+else
+    log "AVISO: falta hevc.py; el camino HEVC quedará deshabilitado (H.264 sigue igual)."
+fi
 chmod +x "$INSTALL_DIR/dex.sh" "$INSTALL_DIR/scrcpy-phone.sh" \
         "$INSTALL_DIR/watchdog.sh" "$INSTALL_DIR/start_phone.sh" \
         "$INSTALL_DIR/update-network.sh" "$INSTALL_DIR/route-input.sh"
@@ -151,6 +164,18 @@ if [ -f "$SOURCE_DIR/tools/patch-mouse-endpoint.py" ]; then
         fail "El parche del endpoint /api/mouse falló; revisa el mensaje anterior."
 else
     fail "Falta tools/patch-mouse-endpoint.py en el paquete."
+fi
+
+# --- 3b-2. parchear server.py (camino de relay HEVC, issue #4) ----------------
+# IDEMPOTENTE y con anclas exactas, mismo patrón. El default sigue siendo
+# H.264: el camino HEVC solo se activa si scrcpy arranca con VIDEO_CODEC=h265
+# y emite un VPS. Sin hevc.py, el parche se salta (H.264 queda intacto).
+if [ -f "$SOURCE_DIR/tools/patch-hevc-relay.py" ] && [ -f "$INSTALL_DIR/hevc.py" ]; then
+    "$PREFIX/bin/python3" "$SOURCE_DIR/tools/patch-hevc-relay.py" \
+        "$INSTALL_DIR/server.py" || \
+        fail "El parche del relay HEVC falló; revisa el mensaje anterior."
+else
+    log "AVISO: sin tools/patch-hevc-relay.py o hevc.py; el camino HEVC queda deshabilitado."
 fi
 
 # --- 3c. compilar el grabber EVIOCGRAB (respaldo del enrutado) ---------------
@@ -201,6 +226,7 @@ if [ ! -f "$AUTH_FILE" ]; then
     "$PREFIX/bin/python3" - "$AUTH_FILE" "$VIEWER" "$ADMIN" <<'PY'
 import json, os, sys
 path, viewer, admin = sys.argv[1], sys.argv[2], sys.argv[3]
+
 with open(path, "w", encoding="utf-8") as handle:
     json.dump({"viewer": viewer, "admin": admin}, handle, indent=2)
 os.chmod(path, 0o600)
@@ -292,3 +318,5 @@ log "fantasma, cursor Samsung real). Respaldo = mouse-route.py (getevent)."
 log "Si la asociación nativa no arranca, revisa si jvm/inputassoc.zip y"
 log "jvm/inputfocus.zip están presentes (jvm/build.sh en una máquina con JDK)."
 log "Desactiva todo el enrutado del mouse con MOUSE_ROUTE=0 en server.env."
+log "Codec: default H.264. Para el experimento A/B HEVC (issue #4): añade"
+log "VIDEO_CODEC=h265 a ~/.config/wtm/server.env y reinicia el scrcpy server."
