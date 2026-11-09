@@ -32,6 +32,24 @@ motion test completed at a peak reported skin temperature of 42.2 °C and Androi
 status 2 (moderate); additional load tests were stopped. These observations are not a
 recommendation to operate at those temperatures.
 
+## Observed codec A/B on 2026-11-09 (H.264 vs HEVC, same session, ~60 s per leg)
+
+Protocol: same Wi-Fi (rtt=3 ms), same content (H.264 1080p clip, VLC fullscreen loop),
+same relay, single variable `VIDEO_CODEC` (h264 vs h265); encoder 2000x1200, 12 Mbps cap.
+Full data and caveats in [hevc-study.md §7](hevc-study.md).
+
+| Metric (stable state) | H.264 | HEVC | Reading |
+|---|---|---|---|
+| decode_ms avg | ~25.6–29.3 | ~18.7–20.3 | HEVC ~30% less decode cost |
+| decode_ms max | 84–141 | 38–48 | HEVC 3x lower jitter peaks |
+| TOTAL_ms avg | ~37–43 | ~31–36 | HEVC ~15% lower total latency |
+| Sustained drops | 0 | 0 | Both stable; HEVC had one warm-up window (22 drops, init transient, net_ms low) |
+| Decoded FPS | ~27.1–30.4 | ~29.5–30.1 | Tie; both below the 60 FPS cap (pipeline-side, identical in both legs) |
+| Bitrate | ~8.9–11.1 Mbps | ~10.1–10.9 Mbps | Both at cap — bandwidth efficiency not measured |
+
+This is a single content class, short run: not the acceptance run; the shipped default
+remains H.264 (see hevc-study.md §7 “What this result does NOT claim”).
+
 ## Main conclusions
 
 1. **Software decode is the safe default for the tested tablet.** Forcing hardware
@@ -40,17 +58,21 @@ recommendation to operate at those temperatures.
    for two consecutive one-second checks.
 2. **The bottleneck is content-dependent.** Simple motion can reach near the 60 FPS cap;
    detailed/high-motion content overwhelms the tested tablet decoder/renderer.
-3. **The 12 Mbps encoder setting is not sufficient evidence for quality or required
+3. **The codec A/B (2026-11-09) shows HEVC winning decode latency on this pair for the
+   tested content class, with zero sustained drops** — the H.264-hw multi-second-queue
+   failure mode did not reproduce for HEVC. The shipped default stays H.264 pending the
+   full acceptance run; see [hevc-study.md §7](hevc-study.md).
+4. **The 12 Mbps encoder setting is not sufficient evidence for quality or required
    network throughput.** An observed client telemetry spike reached 62-70 Mbps during a
    difficult-motion test; its instantaneous nature and instrumentation need validation.
-4. **The previously stated ~20 ms average capture-to-decoder goal is not met reliably.**
+5. **The previously stated ~20 ms average capture-to-decoder goal is not met reliably.**
    Some short windows averaged 23-26 ms, app transitions averaged 33-45 ms, and complex
    scenes reached seconds of decode backlog. This is an aspirational software-metric
    goal, not a photon-to-photon measurement or a release gate.
-5. **No OLED-like color/depth claim is supported.** The stream uses H.264 4:2:0 and the
+6. **No OLED-like color/depth claim is supported.** The stream uses H.264 4:2:0 and the
    virtual display advertises SDR. Colorimetry, HDR pass-through, panel calibration,
    transfer function and end-to-end bit depth have not been comprehensively measured.
-6. **No 60 FPS certification exists.** There is no long-duration 60-minute soak, thermal
+7. **No 60 FPS certification exists.** There is no long-duration 60-minute soak, thermal
    steady-state run, packet-loss test, multi-network test, or instrumented panel
    presentation test.
 

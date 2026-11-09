@@ -4,7 +4,7 @@
 
 WTM is the project name for a tested S25-to-Galaxy Tab S6 Lite workflow. It creates a
 2000 x 1200 Android virtual display on the phone, captures and encodes that display with
-the scrcpy Android server, relays H.264 through a Python service running natively in
+the scrcpy Android server, relays H.264 (or H.265/HEVC when selected) through a Python service running natively in
 Termux, and renders it in Chrome on the tablet using WebCodecs. Pointer and keyboard
 events travel in the reverse direction.
 
@@ -49,7 +49,8 @@ contains: [releases](docs/releases.md) · verified evidence:
 - The test pair is a Samsung Galaxy S25 (`SM-S931B`, Android 16 / API 36) and Galaxy Tab
   S6 Lite Wi-Fi (`SM-P613`, Android 14 / API 34).
 - The phone's scrcpy virtual display is configured as 2000 x 1200 at 60 Hz. The
-  encoder is configured for H.264, a 12 Mbps target and a maximum of 60 FPS.
+  encoder is configured for H.264 by default (HEVC selectable via `VIDEO_CODEC=h265` in
+  `server.env`), a 12 Mbps target and a maximum of 60 FPS.
 - Short, relatively simple motion tests reached about 57.6-60 decoded FPS in Chrome, with
   measured mean capture-to-decoder latency around 23-26 ms and no client drops in some
   five-second windows.
@@ -65,10 +66,11 @@ contains: [releases](docs/releases.md) · verified evidence:
   display only — no ghost input on the phone screen, with the real Samsung cursor.
   See [bluetooth-mouse-routing.md](docs/bluetooth-mouse-routing.md).
 - HEVC decoding capability on the tablet was probed and confirmed (2026-11-08, Chrome
-  156): every HEVC variant is exposed via WebCodecs and MediaCapabilities reports a
-  power-efficient (hardware) decoder. This opens the measured H.264-vs-HEVC A/B
-  experiment; the shipped default remains H.264 until that A/B shows a win.
-  See [hevc-study.md](docs/hevc-study.md).
+  156), and the H.264-vs-HEVC A/B was then **measured on this pair (2026-11-09)**:
+  for the tested content class, HEVC decoded ~30% faster with ~3x lower jitter peaks
+  and zero sustained drops. The shipped default remains H.264 pending the full
+  acceptance run; the measured evidence and caveats are in
+  [hevc-study.md §7](docs/hevc-study.md).
 
 Measurements are conditional on scene complexity, Wi-Fi, device temperature, foreground
 state, browser behavior, and battery/thermal management. See
@@ -80,7 +82,7 @@ state, browser behavior, and battery/thermal management. See
 ```text
 S25 Android virtual display (2000 x 1200)
         │
-        ├─ scrcpy-server 5.0.1 / Android MediaCodec / H.264
+        ├─ scrcpy-server 5.0.1 / Android MediaCodec / H.264 (default) or HEVC
         │  abstract video + control sockets
         ▼
 Termux ADB local forward (TCP 1234)
@@ -106,7 +108,7 @@ is not used for video.
 - [Hardware, operating-system, and network requirements](docs/requirements.md)
 - [Performance measurements and acceptance criteria](docs/performance.md)
 - [Performance and optimization backlog](docs/optimization.md)
-- [Codec study: H.264 vs H.265/HEVC (probe measured)](docs/hevc-study.md)
+- [Codec study: H.264 vs H.265/HEVC (probe + measured A/B)](docs/hevc-study.md)
 - [Current Termux deployment and reproduction guide](docs/deployment-termux.md)
 - [Runtime release candidate](docs/runtime-release-candidate.md)
 - [Bluetooth mouse routing (historical subsystem)](docs/bluetooth-mouse-routing.md)
@@ -145,12 +147,16 @@ is not used for video.
    (26/26 passing) plus a completed independent security review and the completed
    on-device certification. This is a source-available prototype, not a Play-Store
    style product. See [certification](docs/certification.md).
-6. **The tablet browser must support WebCodecs.** The web client decodes H.264
+6. **The tablet browser must support WebCodecs.** The web client decodes video
    exclusively via the WebCodecs API (`VideoDecoder`) — there is no MSE or
    `<video>` fallback. **Chrome (or another Chromium-based browser with WebCodecs
    enabled) is required; Firefox does not support WebCodecs H.264 decoding and shows a
    black screen with `0 fps, 0.0 Mbps` and the `sin WebCodecs` overlay note.** On a
    Galaxy Tab S6 Lite, updated Chrome works; keep the tablet's Chrome up to date.
+   The HEVC path has an additional constraint: on Android, Chrome exposes HEVC only
+   through platform (hardware) decoders — there is no software fallback — so the HEVC
+   option additionally requires a hardware HEVC decoder (confirmed present on the
+   tested tablet by the 2026-11-08 probe; see [hevc-study.md](docs/hevc-study.md)).
 7. **The virtual display starts empty (black), and vendor launchers may refuse to run
    on it.** An Android virtual display is created blank. The runtime launcher script
    starts the HOME intent on the newly created display; on Samsung One UI the stock
@@ -203,7 +209,10 @@ See [licensing](LICENSING.md) and third-party notices in
 - Supported installations: **none formally**
 - Latest tested configuration: **S25 + Tab S6 Lite, 2000 x 1200 / configured 60 FPS**
 - Downloadable app: **not available**; source-only Termux installer in `runtime/termux/`
-- Automated tests: 26/26 passing (host), independent security review completed
+- Automated tests: 26/26 security/live suites passing (host), plus the 18-test HEVC
+  bitstream suite (18/18 verified on-device in Termux, S25; CI integration pending —
+  see the HEVC workflows note in [optimization.md](docs/optimization.md)); independent
+  security review completed
 - On-device certification: **completed 2026-11-06, 20/20 PASS** (see [certification](docs/certification.md))
 - CI: `.github/workflows/ci.yml`; releases: `.github/workflows/release.yml`
 - Public issue templates: available in `.github/ISSUE_TEMPLATE/`

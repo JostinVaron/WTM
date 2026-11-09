@@ -1,10 +1,10 @@
 # Codec study: H.264 (AVC) vs H.265 (HEVC) for the WTM pipeline
 
-**Status: pre-implementation study. Evidence-first; nothing below changes
-defaults until the measurements say so.** This document records what was
-verified from primary sources on 2026-11-08, corrects one claim from a
-lower-capability AI assistant, and defines the decision gate for the HEVC
-experiment.
+**Status: A/B measured on real hardware (2026-11-09). Evidence-first; the
+shipped default stays H.264 until the full acceptance run says otherwise.**
+This document records what was verified from primary sources on 2026-11-08,
+corrects one claim from a lower-capability AI assistant, defines the decision
+gate for the HEVC experiment, and now records the measured A/B outcome.
 
 ## 1. What Apple Sidecar actually does (verified)
 
@@ -135,7 +135,7 @@ The hardened probe (runtime/termux/web/probe.html, served by the bridge at
   SÍ (probe instrument functional).
 - AV1 also reported SÍ, but that result is **discarded as a route**: Chrome's
   AV1 decode is dav1d (software), and the S25 has no common AV1 encoder
-  (scrcpy doc/video.md). AV1 is is not a candidate for this pipeline.
+  (scrcpy doc/video.md). AV1 is not a candidate for this pipeline.
 
 **Gate outcome: the browser A/B experiment is GO.** What this does NOT mean:
 `isConfigSupported` is capability, not throughput. The §3 precedent (H.264 hw
@@ -148,7 +148,7 @@ beating the acceptance rows in docs/performance.md.
 
 | Sidecar ingredient | WTM equivalent today | Copyable? |
 |---|---|---|
-| HW encode at source | S25 Snapdagons encode HEVC natively (MediaCodec) | Yes — scrcpy `video_codec=h265` is one flag |
+| HW encode at source | S25 Snapdragons encode HEVC natively (MediaCodec) | Yes — scrcpy `video_codec=h265` is one flag |
 | HW decode at sink | Tab S6 Lite SD720G has HEVC hw decode | Browser: only if Chrome exposes it (probe). Native client: yes |
 | One vendor controls both ends | Samsung phone + Samsung tablet + Google browser | No — three vendors, three update policies |
 | End-to-end latency management | Partial (heartbeat, queue fallback) | Partly — keep measuring |
@@ -171,3 +171,70 @@ fooling itself.
   Sidecar's HEVC pipeline and its hardware cutoffs.
 - docs/performance.md — the measured H.264 hw-decode failure on this tablet.
 - Live probe run on the Tab S6 Lite (section 4c).
+
+## 7. Measured A/B outcome (2026-11-09): HEVC wins decode latency on this pair
+
+**Protocol** (per docs/optimization.md rules): same session, same Wi-Fi
+(rtt=3 ms constant), same content (H.264 1080p ~30 MB clip, VLC fullscreen
+in loop, ~60 s per leg, zero interaction), same relay — the only variable was
+`VIDEO_CODEC` (h264 vs h265). Encoder: 2000x1200, 12 Mbps cap. Codec
+verified per leg from the bridge log: leg A `avc1.640032` (AVC High), leg B
+`stream HEVC detectado (VPS)`.
+
+### Results (5-second client STATS windows, stable state)
+
+| Metric | H.264 (A) | HEVC (B) | Winner |
+|---|---|---|---|
+| Decoded FPS | ~27.1–30.4 | ~29.5–30.1 | Technical tie |
+| decode_ms avg | ~25.6–29.3 | ~18.7–20.3 | **HEVC (~30% less)** |
+| decode_ms max (stable) | 84–141 | 38–48 | **HEVC (3x less jitter)** |
+| TOTAL_ms avg | ~37–43 | ~31–36 | HEVC (~15% less) |
+| TOTAL_ms max (stable) | 100–159 | 87–114 | HEVC |
+| Sustained drops | 0 | 0 | Tie |
+| Bitrate | ~8.9–11.1 Mbps (capped) | ~10.1–10.9 Mbps (capped) | Not measurable (12 Mbps cap) |
+
+**Warm-up**: the first HEVC window had one decoder-initialization transient
+(decode_ms max 482, 22 drops in ONE 5-second window, bitrate still ramping at
+2.2 Mbps) with `net_ms=7.5 (max 55)` and rtt=3 — an initialization transient,
+not a network or content issue. Leg A showed the same class of transient
+without drops.
+
+### Reading against the §3 concern
+
+The platform-decoder concern (H.264-hw measured multi-second queues on this
+tablet) **did not reproduce for HEVC** on this content class: no multi-second
+queues, no sustained drops, TOTAL ~36 ms stable. The adverse precedent from
+another AI's uncontrolled measurement (88-92 drops) was re-measured with our
+own H.264 baseline before comparing, per protocol — the H.264-hw failure mode
+did not appear in either leg's stable state.
+
+### What this result does NOT claim
+
+1. **No 60 FPS claim.** Both legs delivered ~30 FPS despite the 60 FPS cap —
+   the cap is content/pipeline-side and identical in both legs, so the
+   comparison is valid, but 60 FPS with HEVC is not established.
+2. **No bandwidth-efficiency claim.** Both legs ran at the 12 Mbps cap; the
+   HEVC bitrate advantage (same quality at lower Mbps) was not measured.
+3. **One content class, ~60 s/leg, no thermal equilibrium.** This is not the
+   full acceptance run of docs/performance.md. The shipped default stays
+   H.264; the operator of this pair uses `VIDEO_CODEC=h265` in their
+   `server.env` as a documented operator choice backed by this evidence.
+4. **Warm-up drops are real but bounded:** one 5-second window at session
+   start. The client's queue-based fallback (decodeQueueSize > 8 for two
+   consecutive checks) covers this class of transient.
+
+### Follow-ups opened by this result
+
+- **OPT-2 update**: the codec A/B question is answered for this content
+  class; the remaining OPT-2 work is resolution/bitrate sweeps and the full
+  acceptance run. A HEVC-vs-H.264 sweep at lower bitrates (below the cap) is
+  the natural next measurement for the bandwidth question.
+- The FPS cap investigation (both legs at ~30 FPS with a 60 cap) is a
+  separate pipeline question, tracked in the optimization backlog.
+- Decision record: the default flip to HEVC is gated on the full acceptance
+  run; if it passes, the temporary patch-hevc-relay.py consolidates into
+  server.py and the patch is removed, as planned.
+
+Frozen evidence on the operator device: `legA-h264-bridge.log`,
+`legB-hevc-bridge.log`, reproducible extractor `ab-analyze.py` (parses bridge
+STATS lines; excludes warm-up with a bitrate>5 Mbps + drops=0 filter).
