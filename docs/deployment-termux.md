@@ -45,12 +45,17 @@ hardened runtime via Path A.**
    - **Wireless Debugging** (Developer Options): the toggle persists across reboots, but
      the listening port is random per boot; `runtime/termux/find-adb-port.py` discovers
      it automatically. Pair the ADB client once with the Android pairing flow; do not
-     publish pairing keys. On the tested One UI build this toggle turns itself off when
-     Wi-Fi client connectivity drops, so it is unreliable while the phone hosts the
-     hotspot.
+     publish pairing keys. Measured on 2026-11-09: the toggle survives hotspot
+     coexistence **as long as the phone also stays connected to a Wi-Fi network**; it
+     does not stay on with mobile data only, and while both radios are active its
+     listen port can rotate within seconds (three consecutive scanner discoveries were
+     dead at connect time) — treat the Wireless Debugging screen's main
+     "IP address & Port" as the authoritative source and connect with that literal
+     immediately.
    Either way, after every source-phone reboot exactly one manual step is currently
-   unavoidable without root: re-seed the fixed port (USB) or re-enable the Wireless
-   Debugging toggle. Tracked in [issue #15](https://github.com/JostinVaron/WTM/issues/15).
+   unavoidable without root: re-seed the fixed port (USB) or re-connect via the
+   Wireless Debugging screen port. Tracked in
+   [issue #15](https://github.com/JostinVaron/WTM/issues/15).
 6. Termux:Widget is installed and the shortcut scripts are executable. Termux:Boot is
    optional and must be configured separately.
 7. The tablet has Chrome with WebCodecs and can reach the phone's relay IP/port.
@@ -111,8 +116,8 @@ Verify that `/api/status` no longer responds and no scrcpy virtual display remai
 
 `adb tcpip 5555` — the fixed-port adbd TCP mode this deployment uses — **does not
 survive phone reboots**: Android reverts adbd to USB mode on every boot. The Wireless
-Debugging toggle does not solve it by itself: One UI turns it off when Wi-Fi client
-connectivity drops, and its listening port is random per boot. Incident evidence and
+Debugging toggle does not solve it by itself: its listen port is random per boot and
+rotates rapidly in some radio configurations (measured below). Incident evidence and
 the automation plan are tracked in
 [issue #15](https://github.com/JostinVaron/WTM/issues/15).
 
@@ -121,11 +126,30 @@ mode → no ADB device → scrcpy server never starts → relay never starts →
 `rd-bridge.log`, no `healthz` response, viewer black/dead. The widget toast only says
 the start failed; the explicit reason is in `$PREFIX/tmp/rd-start.log`.
 
+### Measured port behavior (2026-11-09)
+
+While router Wi-Fi and the hotspot coexist on the S25, the Wireless Debugging daemon
+re-binds its listening port frequently: `find-adb-port.py` discovered three different
+live listeners over a few minutes, and each `adb connect` was refused seconds later
+(lost race). The **Wireless Debugging screen is the authoritative source**: read the
+main "IP address & Port" (not the pairing port) and connect with that literal
+immediately. On the measured day that connect succeeded on the first try
+(`connected to <host>:<port>` → `device`), after which `adb tcpip 5555` could be seeded
+from Termux itself — no PC and no cable — stabilizing the session on the fixed port.
+
+### ADB availability by connectivity scenario
+
+| Scenario | Viable ADB route after a reboot |
+|---|---|
+| Router Wi-Fi + hotspot coexist (tested setup) | Route B works: the toggle stays enabled while the phone also remains a Wi-Fi client. Connect with the port shown on the Wireless Debugging screen, then seed 5555 from Termux. |
+| Mobile data only, hotspot on, no Wi-Fi | Route B is not viable: the Wireless Debugging toggle does not stay on without Wi-Fi client connectivity (per Android's documentation, wireless debugging requires the device and workstation on the same wireless network). Use Route A (USB cable, one `adb tcpip 5555`); the session then runs cable-free on 5555. |
+| Future: Android 17 / adb 37 (Wi-Fi 2.0) | Automatic reconnection on trusted networks is planned upstream; re-evaluate this runbook when the S25 receives that update. |
+
 After every source-phone reboot, exactly **one manual step** is currently unavoidable
 without root (adb is the only rootless mechanism to create the virtual display).
-Choose either route:
+Choose the route that matches your connectivity scenario:
 
-**Route A — re-seed the fixed port (USB cable, ~2 minutes):**
+**Route A — re-seed the fixed port (USB cable, ~2 minutes; works in every scenario):**
 
 ```sh
 # from any PC with adb, phone connected over USB:
@@ -134,16 +158,22 @@ adb tcpip 5555
 # watchdog is running, recovery is automatic within ~10 s
 ```
 
-**Route B — Wireless Debugging toggle (no cable; requires Wi-Fi client
-connectivity, so it is unreliable while the phone hosts the hotspot):**
+**Route B — Wireless Debugging screen port (no cable; requires the phone to stay
+connected to a Wi-Fi network, see the scenario table):**
 
 ```text
-Developer Options → enable Wireless Debugging (pairing is one-time)
+Developer Options → Wireless Debugging → read the main "IP address & Port"
 ```
 
-Then tap the start widget: `find-adb-port.py` discovers the per-boot port and
-`dex.sh` connects automatically. The watchdog performs the same discovery every
-10 s, so with the toggle on, recovery is hands-off after the toggle itself.
+Then connect with that literal immediately (do not rely on `find-adb-port.py` while
+both radios are active — it can lose the race against the rotating port), and seed the
+fixed port from Termux itself:
+
+```sh
+adb connect <screen-ip:screen-port>
+adb -s <screen-ip:screen-port> tcpip 5555   # now the session is stable on 5555
+adb connect 127.0.0.1:5555
+```
 
 **Diagnostics after a failed start (in order):**
 
@@ -169,9 +199,10 @@ available.
 This is best-effort recovery. It cannot:
 
 - re-seed adbd TCP mode after a phone reboot (see the post-reboot runbook above);
+- reliably discover the Wireless Debugging port while both radios are active (the
+  port rotates; the screen is the authoritative source);
 - turn Wireless Debugging on after Android disables it;
 - accept a new pairing request or user consent;
-- guarantee the current connect port is discoverable;
 - revive Termux after Android force-stop;
 - preserve the Termux-owned ADB forward after the ADB daemon dies;
 - guarantee execution under vendor battery management.
@@ -199,7 +230,8 @@ client/source metrics.
 
 - Source phone rebooted: adbd reverts to USB mode and the fixed TCP port dies; see the
   post-reboot runbook above.
-- Wireless Debugging disabled or port changed.
+- Wireless Debugging disabled or port changed (rapid port rotation observed while
+  router Wi-Fi and hotspot coexist).
 - ADB authorization revoked.
 - Termux force-stopped, reclaimed, updated or battery-restricted.
 - Wi-Fi changes IP/subnet or isolates clients.

@@ -64,13 +64,15 @@ presented as photon-to-photon latency. See [performance evidence](performance.md
   pipeline cannot start without it. Two supported modes:
   - **adbd TCP mode on the fixed port 5555** (`adb tcpip 5555`): stable address and port,
     but it **does not survive phone reboots** — Android reverts adbd to USB mode on every
-    boot, so it must be re-seeded after each reboot via USB (one manual step; see the
+    boot, so it must be re-seeded after each reboot (one manual step; see the
     post-reboot runbook in [deployment](deployment-termux.md)).
   - **Wireless Debugging** (Android 11+): the toggle persists across reboots, but the
     listening port is random per boot and is discovered automatically by
-    `runtime/termux/find-adb-port.py`; pairing is one-time. On the tested One UI build the
-    toggle is turned off when Wi-Fi client connectivity drops, which makes it unreliable
-    while the phone hosts the hotspot.
+    `runtime/termux/find-adb-port.py`; pairing is one-time. Verified 2026-11-09: the
+    toggle survives hotspot coexistence as long as the phone also remains connected to
+    a Wi-Fi network; it does not stay on with mobile data only, and while both radios
+    are active its listen port can rotate within seconds — the Wireless Debugging
+    screen is the authoritative source for the current port.
   - Automated recovery and honest abort reporting are tracked in
     [issue #15](https://github.com/JostinVaron/WTM/issues/15). Until it ships, after every
     source-phone reboot exactly one manual step is unavoidable without root.
