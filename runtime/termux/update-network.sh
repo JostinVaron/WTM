@@ -13,12 +13,31 @@ log(){ printf '[wtm-network] %s %s\n' "$(date '+%F %T')" "$*"; }
 
 [ -f "$CONFIG" ] || { log "No existe $CONFIG; ejecuta install.sh primero."; exit 1; }
 
+# detect_iface_ip: misma lógica que install.sh (2026-11-09): el 'ip' de Termux
+# está bloqueado por netlink en Android moderno, así que se consulta via
+# 'adb shell ip' (el shell de Android sí ve todas las interfaces), con el ip
+# local como respaldo para Android viejo.
+detect_iface_ip(){
+    local iface="$1" out
+    out="$(timeout 5 "$PREFIX/bin/adb" shell "ip -4 addr show $iface" 2>/dev/null \
+        | tr -d '\r' | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}')" || true
+    if [ -z "$out" ]; then
+        out="$(ip -4 addr show "$iface" 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r')" || true
+    fi
+    [ -n "$out" ] && [ "$out" != "127.0.0.1" ] && printf '%s' "$out"
+    return 0
+}
+
 NEW_IP="${1:-}"
 if [ -z "$NEW_IP" ]; then
-    NEW_IP="$(ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
-    [ -z "$NEW_IP" ] && NEW_IP="$(ip -4 addr show swlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
+    # Bug de campo 2026-11-09: consultaba wlan0 (Wi-Fi del router) ANTES que
+    # swlan0 (hotspot), y sin adb: en el S25 devolvía siempre la IP del router
+    # aunque el hotspot estuviera vivo. Orden corregido y detección vía adb:
+    # swlan0 (hotspot One UI) primero, wlan0 (Wi-Fi normal) después.
+    NEW_IP="$(detect_iface_ip swlan0)"
+    [ -z "$NEW_IP" ] && NEW_IP="$(detect_iface_ip wlan0)"
 fi
-[ -z "$NEW_IP" ] && { log "No se detectó IP; pásala como argumento: $0 192.168.x.y"; exit 1; }
+[ -z "$NEW_IP" ] && { log "No se detectó IP; pásala como argumento: $0 10.x.x.x (hotspot) o 192.168.x.y (Wi-Fi)"; exit 1; }
 
 OLD_IP="$(sed -n 's/^WTM_ALLOWED_HOSTS=//p' "$CONFIG" | tr -d '\r')"
 if [ "$OLD_IP" = "$NEW_IP" ]; then
