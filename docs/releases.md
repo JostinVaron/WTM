@@ -34,6 +34,24 @@ in `runtime/termux/VERSION` and bumped before tagging. The current version is
 experimental and does not imply production stability or hardware certification
 beyond the completed on-device run on the tested pair.
 
+## What changed in v0.3.1
+
+- **Hotspot as the recommended transport** (PR #11): `install.sh` prefers
+  `swlan0` (One UI hotspot interface) and syncs `server.env` host/bind lines
+  when the network changes; `stop-dex.sh` reports "already stopped" instead of
+  dying silently; the bridge log now carries timestamps.
+- **IP detection via `adb shell ip`** (PR #13): the Termux `ip` binary cannot
+  read netlink on modern Android, so `swlan0` detection never executed. Both
+  `install.sh` and `update-network.sh` now query interfaces through the adb
+  loopback connection (Android's shell user can read netlink), hotspot first,
+  with the UDP default-route probe as a warned last resort.
+- **Fail-closed private IP sweep** (PR #11): no RFC 1918 operator IP may ever
+  land in the repository; enforced by `runtime/termux/tests/test_server_security.py`.
+- **Measured 60 FPS evidence** (issue #4 follow-up, OPT-8 closed): a full
+  on-device run documented in `docs/performance.md` (59.5–60.1 fps, 1 drop,
+  rtt 3 ms) proving the earlier ~30 fps cap was the reference router, not the
+  pipeline.
+
 ## Automated release process
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml`:
@@ -51,7 +69,7 @@ syntax checks and a fail-closed secret sweep on every push and pull request.
 If Actions are unavailable, build and publish from a machine with `gh`:
 
 ```sh
-VERSION=0.2.0
+VERSION=0.3.1
 tar -czf "wtm-runtime-${VERSION}.tar.gz" \
     --transform "s,^,wtm-runtime-${VERSION}/," \
     LICENSE LICENSE-docs.txt LICENSING.md README.md SECURITY.md \
@@ -83,9 +101,9 @@ On the source phone, in Termux:
 
 ```sh
 curl -L -o wtm.tar.gz \
-  https://github.com/JostinVaron/WTM/releases/download/v0.2.0/wtm-runtime-0.2.0.tar.gz
+  https://github.com/JostinVaron/WTM/releases/download/v0.3.1/wtm-runtime-0.3.1.tar.gz
 tar -xzf wtm.tar.gz
-cd wtm-runtime-0.2.0/runtime/termux
+cd wtm-runtime-0.3.1/runtime/termux
 bash install.sh
 ```
 
