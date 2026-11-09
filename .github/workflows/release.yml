@@ -34,6 +34,7 @@ jobs:
               LICENSE LICENSE-docs.txt LICENSING.md README.md SECURITY.md \
               AGENTS.md CODE_OF_CONDUCT.md CONTRIBUTING.md \
               runtime/termux/server.py \
+              runtime/termux/hevc.py \
               runtime/termux/mouse-route.py \
               runtime/termux/web \
               runtime/termux/dex.sh \
