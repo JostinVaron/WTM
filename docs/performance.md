@@ -28,7 +28,7 @@ equilibrium or a long-term percentile.
 | Forced WebCodecs hardware decode A/B | Client about 13-15 FPS; backlog grew to several seconds | Roughly 88-92 dropped frames per five-second window; decode delay reached multiple seconds | Poor result on this tablet. Restarting Chrome with software decode recovered to ~58.8 FPS |
 | Firefox ↔ Settings app-switch test | Transition windows varied ~26.8-45.9 decoded FPS; source varied ~26.7-57.3 FPS | ~33-45 ms mean; 1-3 drops/window | App changes are a measurable weakness; no screen recording or visual ghost-pixel inspection was performed |
 | Detailed/high-motion test, 20 s | Source reached ~58-59 FPS in later windows; client fell to ~13-14 FPS | Decode delay ~1.4-1.6 s; ~65-66 dropped frames/window; total reported latency ~1.47-1.65 s; transient client throughput telemetry ~62-70 Mbps | End-to-end decode/render path cannot keep up with this content on the tested viewer/configuration |
-| Thermal-aborted test | One run stopped after 10 s at 44.8 °C reported skin temperature | preceding interval ~44.8 FPS, ~53 ms mean, 5 drops, peak ~203 ms | Not a completed stable run |
+| Thermal-aborted test | One run stopped after 10 s at  44.8 °C reported skin temperature | preceding interval ~44.8 FPS, ~53 ms mean, 5 drops, peak ~203 ms | Not a completed stable run |
 
 The phone was manually cooled and charging during follow-up tests. A later 20-second
 motion test completed at a peak reported skin temperature of 42.2 °C and Android thermal
