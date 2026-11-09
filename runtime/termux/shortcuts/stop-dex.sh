@@ -30,6 +30,16 @@ notify(){
 log "Solicitando detención del bridge y del display scrcpy."
 printf '1\n' >"$STOP_FLAG" || { log "No se pudo escribir $STOP_FLAG"; notify "No se pudo detener DeX: error al crear la marca."; exit 1; }
 
+# --- aviso de idempotencia: sin sesión activa, decirlo y salir ----------------
+# Hallazgo de campo 2026-11-09: sin este registro, una corrida sin sesión
+# no dejaba ni una línea de log y resultaba indistinguible de un fallo.
+# El stop-flag ya quedó escrito arriba: el watchdog queda pausado igual.
+if [ ! -r "$PREFIX/tmp/rd-bridge.pid" ] && [ ! -r "$PREFIX/tmp/rd-scrcpy.pid" ]; then
+    log "No hay sesión activa (sin pidfiles de bridge/scrcpy); nada que detener."
+    notify "DeX ya estaba detenido."
+    exit 0
+fi
+
 remote_scrcpy_pid(){
     local pid cmd
     if [ -r "$PREFIX/tmp/rd-scrcpy.pid" ]; then
