@@ -51,8 +51,9 @@ is_termux || fail "Este instalador debe ejecutarse en Termux en el teléfono fue
 # 'aiohttp' NO existe como paquete de Termux: se instala vía pip más abajo.
 # 'clang' compila native/mouse-grab (respaldo EVIOCGRAB del enrutado).
 # iproute2 se instala por completitud, pero Android moderno restringe los sockets
-# netlink para apps normales, así que 'ip' falla con "Permission denied" en
-# teléfonos recientes; la detección de IP usa entonces el fallback de Python.
+# netlink para apps normales, así que el 'ip' de Termux falla con "Permission
+# denied" en teléfonos recientes; por eso la detección de IP consulta via adb
+# (ver detect_iface_ip más abajo) y no depende del 'ip' local.
 # OJO: 'pkg list-installed' imprime "clang/stable,now 21.1.8-3" (con sufijo de
 # repo), no "clang" — el patrón debe ser "^<pkg>/" o nunca matchea y pkg
 # install corre como no-op en cada instalación.
@@ -70,23 +71,41 @@ if ! "$PREFIX/bin/python3" -c 'import aiohttp' >/dev/null 2>&1; then
 fi
 
 # --- 2. IP autorizada ------------------------------------------------------
-# Prioridad de detección (hallazgo de campo 2026-11-09, hotspot Samsung):
-#  1) swlan0 (interfaz del hotspot One UI): es la IP a la que la tablet puede
-#     llegar cuando el teléfono hace de AP. Con datos móviles activos, swlan0
-#     y rmnet coexisten, así que esta debe consultarse PRIMERO.
-#  2) wlan0 (Wi-Fi normal: red de casa/router).
-#  3) Fallback UDP (netlink restringido en Android moderno): devuelve la IP
-#     de la RUTA POR DEFECTO — con hotspot+datos activos es la IP de DATOS
-#     (rmnet), inalcanzable para la tablet. Último recurso, con aviso.
+# Bug de campo (2026-11-09, S25 con Wi-Fi + hotspot simultáneos): el 'ip' de
+# Termux está bloqueado por netlink en Android moderno, así que las consultas
+# a swlan0/wlan0 NUNCA matchean desde Termux y el fallback UDP decidía solo.
+# Ese fallback devuelve la IP de la RUTA POR DEFECTO: con Wi-Fi (internet) +
+# hotspot (video) coexistiendo, es la IP del ROUTER, no la del hotspot —
+# el instalador sincronizó 10.206.237.108 -> 192.168.2.5 y la tablet quedó
+# fuera. Fix: consultar las interfaces con 'adb shell ip' (el shell de
+# Android SÍ ve todas), con timeout; respaldo: ip local (Android viejo) y
+# UDP como último recurso con aviso.
+# Orden de prioridad: 1) swlan0 (hotspot One UI) 2) wlan0 (Wi-Fi normal)
+# 3) fallback UDP con aviso explícito. Para forzar una IP: WTM_ALLOWED_HOSTS.
+detect_iface_ip(){
+    local iface="$1" out
+    # 1) via adb: el shell de Android ve todas las interfaces. timeout por si
+    #    adbd no responde; sin serial (un solo teléfono conectado via loopback).
+    out="$(timeout 5 "$PREFIX/bin/adb" shell "ip -4 addr show $iface" 2>/dev/null \
+        | tr -d '\r' | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}')" || true
+    # 2) respaldo: el ip de Termux (solo Android viejo sin restricción netlink)
+    if [ -z "$out" ]; then
+        out="$(ip -4 addr show "$iface" 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r')" || true
+    fi
+    [ -n "$out" ] && [ "$out" != "127.0.0.1" ] && printf '%s' "$out"
+    return 0
+}
 if [ -n "${WTM_ALLOWED_HOSTS:-}" ]; then
     ALLOWED_HOSTS="$WTM_ALLOWED_HOSTS"
 else
-    ALLOWED_HOSTS="$(ip -4 addr show swlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
-    [ -z "$ALLOWED_HOSTS" ] && ALLOWED_HOSTS="$(ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
+    ALLOWED_HOSTS="$(detect_iface_ip swlan0)"
+    [ -z "$ALLOWED_HOSTS" ] && ALLOWED_HOSTS="$(detect_iface_ip wlan0)"
     if [ -z "$ALLOWED_HOSTS" ]; then
-        # Fallback sin netlink: un socket UDP no envía paquetes, solo consulta
-        # al enrutador de Android qué IP local usaría hacia 8.8.8.8. Funciona
-        # en Android moderno donde netlink está restringido para apps.
+        # Fallback sin netlink y sin adb: un socket UDP no envía paquetes,
+        # solo consulta al enrutador de Android qué IP local usaría hacia
+        # 8.8.8.8. Devuelve la IP de la RUTA POR DEFECTO: con Wi-Fi+hotspot
+        # simultáneos es la IP del ROUTER (inalcanzable para los clientes del
+        # hotspot). Último recurso, siempre con aviso.
         # Nota: python3 -c en vez de heredoc; los heredocs dentro de $( ) dan
         # problemas de parseo en el bash de Termux (visto en S25 real).
         ALLOWED_HOSTS="$("$PREFIX/bin/python3" -c 'import socket
@@ -101,9 +120,9 @@ except Exception:
     pass')"
         if [ -n "$ALLOWED_HOSTS" ]; then
             log "AVISO: IP detectada por el fallback de ruta por defecto ($ALLOWED_HOSTS)."
-            log "  Con hotspot + datos móviles activos esta puede ser la IP de DATOS"
-            log "  (inalcanzable para la tablet), no la del hotspot."
-            log "  Verifica con: ip -4 addr show swlan0 (hotspot) o wlan0 (Wi-Fi),"
+            log "  Con Wi-Fi + hotspot simultáneos esta puede ser la IP del ROUTER"
+            log "  (inalcanzable para los clientes del hotspot), no la del hotspot."
+            log "  Verifica con: adb shell ip -4 addr show swlan0 (hotspot) o wlan0 (Wi-Fi),"
             log "  o reinstala con la IP explícita: WTM_ALLOWED_HOSTS=<ip> bash install.sh"
         fi
     fi
