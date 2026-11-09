@@ -115,8 +115,8 @@ Consequences:
   HEVC overall on this hardware**.
 - The browser-independent path (a small native Android client using
   MediaCodec against the existing WebSocket relay) removes the Chrome/WebCodecs
-  dependency *and* unlocks the hardware HEVC decoder in one move. That is the
-  same architectural move Sidecar makes: control the decode end.
+  dependency *and* unlocks the hardware HEVC decoder in one move. That is
+  the same architectural move Sidecar makes: control the decode end.
 - Order of work stays: probe first (cheap), in-browser A/B if viable, and
   keep the native client as the strategic path (already milestone 5,
   "Native service feasibility", in project-governance.md).
@@ -243,3 +243,67 @@ did not appear in either leg's stable state.
 Frozen evidence on the operator device: `legA-h264-bridge.log`,
 `legB-hevc-bridge.log`, reproducible extractor `ab-analyze.py` (parses bridge
 STATS lines; excludes warm-up with a bitrate>5 Mbps + drops=0 filter).
+
+## 8. Experiment 1 — S25 encoder verification (2026-11-09): hardware confirmed, vendor default kept
+
+The A/B (§7) proved the **codec**; it never verified **which encoder** the
+S25 actually uses. Since day one the encoder was whatever the vendor default
+selected — trusted without evidence. This section closes that gap for the
+production pair (Galaxy S25, SM-S931B, Android 16, scrcpy-server 5.0.1).
+
+### What was verified, and how
+
+| Layer | Evidence |
+|---|---|
+| Encoder in use | scrcpy server log: `Using video encoder: 'c2.qti.hevc.encoder'` |
+| Hardware (not software) | `dumpsys media.resource_manager`: `c2.qti.hevc.encoder Instances: 1` on the live stream; software components would report `sw codec : yes` — this one does not |
+| Full hw registry | `/vendor/etc/media_codecs.xml` + `media_codecs_sun.xml` (vendor codec registry, the source MediaCodecList reads): 5 hw HEVC encoders registered (table below) |
+
+### Complete HEVC encoder inventory on the S25 (from the vendor XML registry)
+
+| Encoder | Type / purpose | Verdict for WTM |
+|---|---|---|
+| `c2.qti.hevc.encoder` | `video/hevc` — general-purpose SDR 8-bit | **In use — the only applicable hw encoder** |
+| `c2.qti.hevc.encoder.hdr` | `video/hevc` — HDR 10-bit output | Discarded: screen content is SDR 8-bit (10-bit costs more bitrate for zero visual gain, and forces Main10 decode on the tablet) |
+| `c2.qti.hevc.encoder.cq` | `video/hevc` — constant-quality rate control | Discarded: scrcpy drives the stream by bitrate (`bitrate-mode=2` CBR), which CQ ignores — it would disable the bitrate ladder measurement |
+| `c2.qti.hevc.encoder.secure` | `wfd/hevc` — secure Miracast/WFD path | Discarded: registered under a different MIME (`wfd/hevc`), not selectable for `video/hevc` |
+| `c2.qti.mvhevc.encoder` | `video/x-mvhevc` — multiview/stereo | Discarded: different MIME, different use case |
+
+Software fallbacks exist (`c2.android.hevc.encoder`, per
+`media_codecs_google_c2_video.xml`) but are out of scope: hardware is
+verified in use. Notably, **no `low_power` encoder variant exists** on this
+device — `low_latency` is registered as a *decoder* only
+(`c2.qti.hevc.decoder.low_latency`).
+
+### Known quirk: scrcpy `list_encoders` is broken on this build
+
+`app_process com.genymobile.scrcpy.Server 5.0.1 list_encoders=true` aborts
+with SIGABRT (exit 134) on this Android 16 + One UI combination — with and
+without `tunnel_forward=true`, with `video_codec=` set and unset, and with a
+dedicated scid/socket that left the live stream untouched. Three attempts,
+three aborts; no output ever reached the socket. The viable alternates that
+produced the evidence above: `dumpsys media.resource_manager` (live instance)
+and the vendor XML registry (full inventory). **Do not burn time on
+`list_encoders` on this build again.**
+
+### Decision
+
+**No pinning.** The vendor default selects exactly `c2.qti.hevc.encoder`,
+the only applicable hardware encoder for this pipeline. A `VIDEO_ENCODER=`
+knob would add configuration surface with no possible gain. Combined with
+the tablet-side decoder verification (§4c: Adreno 618, HEVC Main 8-bit hw,
+`powerEfficient=true`), both ends of the video chain now run on silicon
+with evidence at each end.
+
+### Status of the chain after this experiment
+
+| End | Component | Verified |
+|---|---|---|
+| Source encode | `c2.qti.hevc.encoder` (Snapdragon 8 Elite, hw) | This section (§8) |
+| Transport | HEVC Annex-B raw stream, codec auto-detected by relay (VPS) | §7 |
+| Sink decode | Adreno 618 HEVC Main 8-bit hw (Chrome 156, WebCodecs) | §4c |
+| End-to-end reference numbers | 59.5–60.1 FPS, rtt=3 ms, 1 drop / 2.5 min (hotspot test) | performance.md / optimization backlog |
+
+Next measurement in the plan: the **bitrate ladder** (16 → 18 → 20 Mbps) —
+now justified twice over, since the 60 FPS test hit the 12 Mbps cap. It runs
+on the verified encoder above.
