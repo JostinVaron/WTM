@@ -10,8 +10,15 @@ events travel in the reverse direction.
 
 ## Quick start
 
-Tested pair: Samsung Galaxy S25 (source phone, Termux + Wireless Debugging) and Galaxy
+Tested pair: Samsung Galaxy S25 (source phone, Termux + ADB over TCP) and Galaxy
 Tab S6 Lite (viewer, Chrome). The package is a source installer — there is no APK.
+
+**Recommended transport:** connect both devices to the source phone's hotspot
+(the phone acts as its own AP; the tablet joins that network). Measured on
+2026-11-09, the same pipeline and content class that delivered ~30 FPS over the
+owner's reference router delivered sustained ~60 FPS over the hotspot with
+`rtt=3 ms` (see [performance](docs/performance.md)). Router Wi-Fi remains
+supported; it was the measured bottleneck in the reference network.
 
 ```sh
 # 1. On the source phone, in Termux:
@@ -39,7 +46,7 @@ contains: [releases](docs/releases.md) · verified evidence:
 > completed independent security review; there is **no** signed Android app,
 > supported device matrix, or verified 60 FPS guarantee. The on-device
 > certification on the S25 was completed on 2026-11-06 (20/20 device checks, live browser session); see [certification](docs/certification.md). The production path requires
-> Termux and Wireless ADB.
+> Termux and ADB over TCP (local wireless debugging or USB); see the deployment guide.
 > The pre-hardening prototype that used to run on the owner's phone predates the
 > hardening published here; the S25 has since been migrated to the hardened
 > runtime (v0.1.2, certified 2026-11-06) — see [SECURITY.md](SECURITY.md).
@@ -52,12 +59,16 @@ contains: [releases](docs/releases.md) · verified evidence:
   encoder is configured for HEVC (H.265) by default since v0.3.0 (H.264
   selectable via `VIDEO_CODEC=h264` in `server.env`), a 12 Mbps target and a
   maximum of 60 FPS.
-- Short, relatively simple motion tests reached about 57.6-60 decoded FPS in Chrome, with
-  measured mean capture-to-decoder latency around 23-26 ms and no client drops in some
-  five-second windows.
-- Detailed motion and app changes caused major regressions: the tablet fell to 13-14
-  decoded FPS with 1.4-1.6 seconds of decoder delay and 65-66 dropped frames in
-  five-second windows in one test. App-switch windows measured about 27-46 FPS.
+- Measured 2026-11-09 on the phone-hotspot transport: real 4K60 content was
+  delivered at sustained ~59.5–60.1 decoded FPS with one dropped frame in
+  ~2.5 minutes and constant `rtt=3 ms`; the encoder bitrate reached the 12 Mbps
+  cap (9.6–12.9 Mbps observed). The same pipeline over the owner's reference
+  router delivered ~30 FPS — the router was the transport bottleneck, not the
+  pipeline (see [performance](docs/performance.md), 2026-11-09).
+- Earlier router Wi-Fi tests (2026-11-06): simple motion reached ~57.6-60
+  decoded FPS with 23-26 ms mean capture-to-decoder latency in short windows;
+  detailed/high-motion content collapsed the tablet to 13-14 decoded FPS with
+  1.4-1.6 s of decoder delay in one test. App-switch windows measured about 27-46 FPS.
 - For this tablet, WebCodecs software decoding performed substantially better than the
   forced hardware path in the observed A/B test. The browser defaults to software.
 - Touch/input forwarding and the virtual-display pipeline have been used on this pair,
@@ -73,7 +84,7 @@ contains: [releases](docs/releases.md) · verified evidence:
   long production session on this pair validated it; the evidence and caveats are in
   [hevc-study.md §7](docs/hevc-study.md).
 
-Measurements are conditional on scene complexity, Wi-Fi, device temperature, foreground
+Measurements are conditional on scene complexity, transport, device temperature, foreground
 state, browser behavior, and battery/thermal management. See
 [Performance and test evidence](docs/performance.md) and the
 [optimization backlog](docs/optimization.md).
@@ -90,7 +101,7 @@ Termux ADB local forward (TCP 1234)
         ▼
 Python 3 + aiohttp relay in Termux (HTTPS 8443, WebSocket)
         │
-        │ Wi-Fi LAN
+        │ phone hotspot (recommended) or Wi-Fi LAN
         ▼
 Chrome on Tab S6 Lite (WebCodecs + canvas)
         │
@@ -99,8 +110,8 @@ Chrome on Tab S6 Lite (WebCodecs + canvas)
 ```
 
 ADB is used to launch/manage the phone-side scrcpy server and to forward its local
-abstract sockets to the Termux relay. The tablet's video path is IP over Wi-Fi; Bluetooth
-is not used for video.
+abstract sockets to the Termux relay. The tablet's video path is IP over the phone
+hotspot or Wi-Fi; Bluetooth is not used for video.
 
 ## Documentation
 
@@ -130,11 +141,13 @@ is not used for video.
    and watchdog are Termux processes. Force-stopping Termux or Android killing it can
    interrupt the stream. `nohup` and a wake lock do not make a process an Android system
    service.
-2. **Wireless ADB must be available and authorized.** Android can disable Wireless
+2. **ADB must be available and authorized.** Android can disable Wireless
    Debugging or change its TCP port after a reboot. Saved pairing keys do not guarantee
-   that the debugging service remains enabled.
+   that the debugging service remains enabled. A USB connection is an alternative ADB
+   transport where supported.
 3. **60 FPS is a cap, not an end-to-end guarantee.** The phone can produce near-60 FPS
-   under some scenes while Chrome drops far below that rate under complex motion.
+   under some scenes while Chrome drops far below that rate under complex motion. The
+   2026-11-09 hotspot measurement is one short run on one pair, not a soak.
 4. **Hardened runtime deployed and certified.** The hardened runtime in
    [runtime/termux/](runtime/termux/) (cookie auth, Origin/Host checks, TLS fail-closed,
    admin-only control) was independently reviewed before publication. On 2026-11-06 it
@@ -186,6 +199,14 @@ is not used for video.
    without exclusivity: the pointer may also move on the phone's physical screen.
    Disable all mouse routing with `MOUSE_ROUTE=0` in `server.env`. See
    [bluetooth-mouse-routing.md](docs/bluetooth-mouse-routing.md).
+9. **Hotspot + mobile data changes the addressing model.** With the phone's hotspot
+   active and mobile data on, the phone has multiple interfaces (`swlan0` for the
+   hotspot, `rmnet` for data) and One UI assigns hotspot clients a variable `10.x.x.x`
+   subnet that can differ every session. The installer and `update-network.sh` detect
+   the hotspot interface (`swlan0`) first; never hardcode the phone's hotspot address.
+   The hotspot path was verified working on 2026-11-09, but hotspot client
+   isolation, DHCP lease behavior, and battery cost of a sustained AP role are not
+   characterized.
 
 ## Hardware requirements: what we can and cannot claim
 
@@ -208,7 +229,8 @@ See [licensing](LICENSING.md) and third-party notices in
 - License: software [PolyForm Noncommercial 1.0.0](LICENSE), documentation
   [CC BY-NC 4.0](LICENSE-docs.txt) — see [Licensing](LICENSING.md)
 - Supported installations: **none formally**
-- Latest tested configuration: **S25 + Tab S6 Lite, 2000 x 1200 / configured 60 FPS**
+- Latest tested configuration: **S25 + Tab S6 Lite, 2000 x 1200 / configured 60 FPS,
+  phone-hotspot transport**
 - Downloadable app: **not available**; source-only Termux installer in `runtime/termux/`
 - Automated tests: 26/26 security/live suites passing (host), plus the 18-test HEVC
   bitstream suite (18/18 verified on-device in Termux (S25) and integrated in CI); independent
