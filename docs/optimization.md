@@ -46,7 +46,14 @@ The Tab S6 Lite software decoder collapses under detailed/high-motion content
 3. Revisit hardware decode on the tablet behind a strict queue guard (the
    current auto-fallback exists; the question is whether a bounded HW path can
    beat SW on this panel at all).
-4. Consider `codec=h265` A/B — decode cost vs. bitrate, tablet permitting.
+4. ~~Consider `codec=h265` A/B — decode cost vs. bitrate, tablet permitting.~~
+   **Answered (2026-11-09): the measured A/B ran on this pair — HEVC wins
+decode latency (~30% less, 3x lower jitter peaks, zero sustained drops) for
+   the tested content class; the shipped default stays H.264 pending the full
+   acceptance run. Remaining open questions under OPT-2: HEVC-vs-H.264 sweep
+   BELOW the 12 Mbps cap (bandwidth efficiency was not measurable at the cap),
+   and complex-motion HEVC behavior (the A/B used one content class). See
+   hevc-study.md §7 and performance.md (2026-11-09).**
 
 ### OPT-3 — Wi-Fi power-save heartbeat tuning
 The client sends a 25 ms heartbeat to keep the tablet radio out of power-save
@@ -61,8 +68,8 @@ and measuring whether the dip is encoder-side (source FPS drops too) or
 client-side.
 
 ### OPT-5 — Encoder settings sweep
-CRF/preset/GOP/bitrate are currently fixed defaults. A documented sweep on the
-S25 (thermal state held constant) should produce a recommended profile per
+CRF/preset/GOP/bitrate are currently fixed defaults. A documented sweep on
+the S25 (thermal state held constant) should produce a recommended profile per
 content class. No change ships without a repeated A/B.
 
 ### OPT-6 — Photon-to-photon instrumentation
@@ -74,6 +81,12 @@ end-to-end latency claim. Until then: no latency numbers in marketing copy.
 After client reconnect the relay serves a cached keyframe. Untested at scale:
 behavior under Wi-Fi roaming, phone reboot mid-session, and Chrome tab
 suspension on the tablet. Define expected UX and verify.
+
+### OPT-8 — FPS cap investigation (~30 delivered with 60 configured)
+Observed in the 2026-11-09 codec A/B: both legs delivered ~30 decoded FPS while
+the encoder is configured for 60 — identical in both legs, so the A/B is valid,
+but the cap's location (content frame rate vs encoder vs bridge) is
+unidentified. Investigate before any 60 FPS claim.
 
 ## How to measure (rules)
 
@@ -90,3 +103,7 @@ suspension on the tablet. Define expected UX and verify.
 
 - 2026-11-07 — Startup mouse-association retry storm fixed (see OPT-1);
   software decode default and queue-based HW fallback (see performance.md).
+- 2026-11-09 — Measured codec A/B H.264 vs HEVC on this pair: HEVC wins decode
+  latency for the tested content class; default stays H.264 pending the
+  acceptance run. Relay HEVC path merged (issue #4 closed); evidence in
+  hevc-study.md §7 and performance.md.
