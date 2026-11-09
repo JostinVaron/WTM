@@ -1,5 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# scrcpy-phone.sh — captura la pantalla COMPLETA del teléfono y la expone como H.264 crudo.
+# scrcpy-phone.sh — captura la pantalla COMPLETA del teléfono y la expone como
+# H.264/H.265 crudo (Annex-B) para el relay.
 # Requiere depuración inalámbrica + adb conectado al propio teléfono.
 # Selecciona el dispositivo por modelo (WTM_PHONE_MODEL, por defecto SM-S931B), no la tablet.
 set -euo pipefail
@@ -15,10 +16,16 @@ FPS="${FPS:-60}"
 SCID="${SCID:-7777}"
 SCRCPY_PORT="${SCRCPY_PORT:-1234}"
 
+# Codec de vídeo del encoder (issue #4, docs/hevc-study.md): h264 sigue
+# siendo el DEFAULT; h265 activa el codificador HEVC del S25 para el
+# experimento A/B medido. El relay detecta el codec de los NAL que llegan
+# (VPS/SPS/PPS HEVC vs SPS/PPS AVC) — no hay que tocar server.py para probar.
+VIDEO_CODEC="${VIDEO_CODEC:-h264}"
+
 # Mouse UHID (OPTATIVO, experimental): con MOUSE_MODE=uhid el server crea un
 # mouse virtual UHID asociado al display virtual (scrcpy >=3.3, permiso
 # ASSOCIATE_INPUT_DEVICE_TO_DISPLAY de Android 15+). POR DEFECTO está apagado:
-# la inyección clásica (POINTER_ID_MOUSE, hover con cursor en el DeX) está
+# la inyección clásica (POINTER_ID_MOUSE, hover con cursor en DeX) está
 # probada y es el mismo canal que usa mouse-route.py para enrutar el mouse
 # físico Bluetooth del teléfono; habilitar uhid además podría crear dos
 # punteros en conflicto. Para probarlo: MOUSE_MODE=uhid en server.env.
@@ -43,14 +50,14 @@ scrcpy_pid(){
   if [ -r "$PREFIX/tmp/rd-scrcpy.pid" ]; then
     pid=$(tr -cd '0-9' <"$PREFIX/tmp/rd-scrcpy.pid")
     if [ -n "$pid" ]; then
-      cmd=$("$ADB" -s "$PHONE" shell "cat /proc/$pid/cmdline" 2>/dev/null | tr '\000' ' ' | tr -d '\r' || true)
+      cmd="$("$ADB" -s "$PHONE" shell "cat /proc/$pid/cmdline" 2>/dev/null | tr '\000' ' ' | tr -d '\r' || true)"
       case "$cmd" in
         *com.genymobile.scrcpy.Server*) printf '%s\n' "$pid"; return 0 ;;
       esac
     fi
   fi
   for pid in $("$ADB" -s "$PHONE" shell 'ps -A' | awk '$NF == "app_process" {print $2}' | tr -d '\r'); do
-    cmd=$("$ADB" -s "$PHONE" shell "cat /proc/$pid/cmdline" 2>/dev/null | tr '\000' ' ' | tr -d '\r' || true)
+    cmd="$("$ADB" -s "$PHONE" shell "cat /proc/$pid/cmdline" 2>/dev/null | tr '\000' ' ' | tr -d '\r' || true)"
     case "$cmd" in
         *com.genymobile.scrcpy.Server*) printf '%s\n' "$pid"; return 0 ;;
     esac
@@ -77,7 +84,7 @@ fi
 "$ADB" -s "$PHONE" forward "tcp:${SCRCPY_PORT}" "localabstract:${ABSTRACT}"
 
 if [ -n "$SCRCPY_PID" ]; then
-  log "socket listo en 127.0.0.1:${SCRCPY_PORT}; no se reinició el servidor."
+  log "socket listo en 127.0.0.1:${SCRCPY_PORT}; no se reinició el servidor (el codec activo es el de esa instancia)."
   exit 0
 fi
 
@@ -94,14 +101,19 @@ if [ -n "$MOUSE_MODE" ] && [ "$MOUSE_MODE" != "inject" ]; then
   MOUSE_OPT="mouse=${MOUSE_MODE}"
   log "mouse: ${MOUSE_MODE} (experimental; el mouse físico del teléfono se enruta aparte con mouse-route.py)"
 fi
-log "arrancando scrcpy-server (${MAX_SIZE}px, ${BITRATE} bps, ${FPS}fps${NEW_DISPLAY:+", display virtual ${NEW_DISPLAY}"})..."
+case "$VIDEO_CODEC" in
+  h264) CODEC_OPT="" ;;                    # default de scrcpy: se omite el flag
+  h265) CODEC_OPT="video_codec=h265"; log "codec HEVC (experimento A/B, issue #4)" ;;
+  *)    log "VIDEO_CODEC inválido: '$VIDEO_CODEC' (usa h264 o h265)"; exit 1 ;;
+esac
+log "arrancando scrcpy-server (${MAX_SIZE}px, ${BITRATE} bps, ${FPS}fps${NEW_DISPLAY:+", display virtual ${NEW_DISPLAY}"}, codec ${VIDEO_CODEC})..."
 # IMPORTANTE: usar 'env CLASSPATH=... app_process ... &' directamente. El patrón
 # 'nohup sh -c "CLASSPATH=... app_process ..."' hace que app_process muera al cerrar
 # el shell (dejaba el DeX congelado). 'env' + '&' mantiene el proceso vivo.
 start_server() {
   "$ADB" -s "$PHONE" shell "env CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / com.genymobile.scrcpy.Server 5.0.1 \
   scid=${SCID} tunnel_forward=true audio=false control=true cleanup=true \
-  raw_stream=true ${NEW_DISPLAY_OPT} ${MOUSE_OPT} max_size=${MAX_SIZE} stay_awake=true max_fps=${FPS} \
+  raw_stream=true ${NEW_DISPLAY_OPT} ${MOUSE_OPT} ${CODEC_OPT} max_size=${MAX_SIZE} stay_awake=true max_fps=${FPS} \
   video_bit_rate=${BITRATE} video_codec_options=i-frame-interval=1,bitrate-mode=2 \
   >/data/local/tmp/scrcpy.log 2>&1 &" 2>&1
 }
@@ -137,7 +149,7 @@ printf '%s\n' "$SCRCPY_PID" >"$PREFIX/tmp/rd-scrcpy.pid"
 # para poblar el display. Apps con FLAG_SECURE (bancos, Netflix) renderizan
 # negro por diseño y no se pueden capturar.
 if [ -n "${NEW_DISPLAY:-}" ]; then
-  VD_ID=$("$ADB" -s "$PHONE" shell "dumpsys display" 2>/dev/null | grep -oE 'mDisplayId=[0-9]+' | sort -u | grep -v 'mDisplayId=0' | head -1 | grep -oE '[0-9]+' || true)
+  VD_ID="$("$ADB" -s "$PHONE" shell "dumpsys display" 2>/dev/null | grep -oE 'mDisplayId=[0-9]+' | sort -u | grep -v 'mDisplayId=0' | head -1 | grep -oE '[0-9]+' || true)"
   if [ -n "$VD_ID" ]; then
     if "$ADB" -s "$PHONE" shell "am start --display ${VD_ID} -a android.intent.action.MAIN -c android.intent.category.HOME" >/dev/null 2>&1; then
       log "HOME lanzado en el display virtual ${VD_ID}."
@@ -151,4 +163,4 @@ if [ -n "${NEW_DISPLAY:-}" ]; then
   fi
 fi
 
-log "H.264 crudo en 127.0.0.1:${SCRCPY_PORT}; server scrcpy confirmado."
+log "stream crudo (${VIDEO_CODEC}) en 127.0.0.1:${SCRCPY_PORT}; server scrcpy confirmado."
