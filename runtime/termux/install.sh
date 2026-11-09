@@ -3,7 +3,7 @@
 #
 # Qué hace:
 #  1. Instala las dependencias de Termux (pkg) si faltan (clang incluido).
-#  2. Copia las fuentes del paquete a la carpeta de desplegamiento.
+#  2. Copia las fuentes del paquete a la carpeta de despliegue.
 #  3. Descarga el scrcpy-server oficial v5.0.1 y verifica su SHA-256.
 #  4. Genera credenciales ÚNICAS por instalación (fuera de este repositorio):
 #       - tokens de acceso viewer/admin (256 bits cada uno)
@@ -245,7 +245,7 @@ KEY="$CONFIG_DIR/key.pem"
 FINGERPRINT_FILE="$CONFIG_DIR/cert-fingerprint.txt"
 if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
     log "Generando certificado y llave TLS propios de esta instalación."
-    openssl req -x509 -newkey rsa:2048 -keyout "KEY" -out "CERT" \
+    openssl req -x509 -newkey rsa:2048 -keyout "$KEY" -out "$CERT" \
         -days 825 -nodes -subj "/CN=$ALLOWED_HOSTS" \
         -addext "subjectAltName=IP:$ALLOWED_HOSTS,DNS:localhost,IP:127.0.0.1" \
         >/dev/null 2>&1 || fail "No se pudo generar el material TLS."
