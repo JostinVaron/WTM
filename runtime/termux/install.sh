@@ -10,7 +10,8 @@
 #       - certificado y llave TLS propias
 #       - server.env con puerto/host autorizado
 #  5. Instala los atajos de Termux:Widget y el arranque de Termux:Boot.
-#  6. Parchea server.py y web/index.html (endpoint /api/mouse + cursor en tablet).
+#  6. Parchea server.py y web/index.html (endpoint /api/mouse + cursor en
+#     tablet + timestamps del log del bridge).
 #  7. Compila native/mouse-grab (EVIOCGRAB: respaldo del enrutado sin fantasma).
 #  8. Copia el subsistema de ASOCIACIÓN NATIVA (route-input.sh + jvm/):
 #     la vía principal del enrutado de mouse (APIs ocultas de InputManager).
@@ -18,7 +19,7 @@
 #     issue #4 cerrado) y copia hevc.py junto al server.
 #
 # Es idempotente: nunca sobrescribe tokens, TLS o configuración existentes
-# (las IPs de host/bind SÍ se sincronizan: ver sección 2 y 5b).
+# (las IPs de host/bind SÍ se sincronizan: ver secciones 2 y 5b).
 # No incluye secretos: todo el material sensible se crea en ~/.config/wtm.
 set -euo pipefail
 
@@ -180,6 +181,18 @@ if [ -f "$SOURCE_DIR/tools/patch-mouse-endpoint.py" ]; then
         fail "El parche del endpoint /api/mouse falló; revisa el mensaje anterior."
 else
     fail "Falta tools/patch-mouse-endpoint.py en el paquete."
+fi
+
+# --- 3b-3. timestamps del log del bridge (parche idempotente) ---------------
+# Hallazgo de campo 2026-11-09: rd-bridge.log mezclaba carreras viejas y
+# nuevas sin marcas de tiempo. El parche redirige los prints etiquetados
+# ([server]/[hevc]/[client]) a una función log() con timestamp.
+if [ -f "$SOURCE_DIR/tools/patch-bridge-timestamps.py" ]; then
+    "$PREFIX/bin/python3" "$SOURCE_DIR/tools/patch-bridge-timestamps.py" \
+        "$INSTALL_DIR/server.py" || \
+        fail "El parche de timestamps del bridge falló; revisa el mensaje anterior."
+else
+    fail "Falta tools/patch-bridge-timestamps.py en el paquete."
 fi
 
 # --- 3b-2. verificar el camino HEVC consolidado (v0.3.0, issue #4) -----------
