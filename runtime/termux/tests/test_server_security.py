@@ -22,7 +22,9 @@ from aiohttp.test_utils import TestServer, TestClient
 import aiohttp
 
 SERVER_DIR = Path(__file__).resolve().parents[1]
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# tests/test_server_security.py vive a <repo>/runtime/termux/tests/:
+# parents[0]=tests, [1]=termux, [2]=runtime, [3]=raíz del repositorio.
+REPO_ROOT = Path(__file__).resolve().parents[3]
 import sys
 
 sys.path.insert(0, str(SERVER_DIR))
