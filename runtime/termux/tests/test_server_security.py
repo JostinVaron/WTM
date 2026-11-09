@@ -10,6 +10,7 @@ real encoder; only aiohttp and a local test certificate.
 import asyncio
 import json
 import os
+import re
 import ssl
 import tempfile
 import time
@@ -21,6 +22,9 @@ from aiohttp.test_utils import TestServer, TestClient
 import aiohttp
 
 SERVER_DIR = Path(__file__).resolve().parents[1]
+# tests/test_server_security.py vive a <repo>/runtime/termux/tests/:
+# parents[0]=tests, [1]=termux, [2]=runtime, [3]=raíz del repositorio.
+REPO_ROOT = Path(__file__).resolve().parents[3]
 import sys
 
 sys.path.insert(0, str(SERVER_DIR))
@@ -268,6 +272,56 @@ class SecurityIntegrationTest(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/healthz")
         self.assertEqual(response.status, 200)
         self.assertIn("ok", await response.json())
+
+
+class PrivateIpSweepTest(unittest.TestCase):
+    """Política de privacidad del proyecto (2026-11-09): ninguna IP privada
+    real de un operador (RFC 1918: 192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+    puede quedar publicada en el repositorio — ni en código, docs ni logs
+    citados. Este test falla el CI ante cualquier aparición.
+
+    No se excluyen 127.0.0.1/0.0.0.0/8.8.8.8: no son RFC 1918 y son parte
+    del protocolo público. Los placeholders documentados (192.168.x.y,
+    <phone-ip>) no matchean la expresión por construcción.
+    """
+
+    # RFC 1918 con fronteras de no-dígito para no atrapar versiones ni
+    # números hexadecimales largos.
+    RFC1918 = re.compile(
+        r"(?<![\d.])"
+        r"(?:192\.168\.\d{1,3}\.\d{1,3}"
+        r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+        r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})"
+        r"(?![\d.])")
+
+    def test_no_private_operator_ips_in_repository(self):
+        self.assertTrue(REPO_ROOT.is_dir(), f"repo root missing: {REPO_ROOT}")
+        offenders = []
+        for path in REPO_ROOT.rglob("*"):
+            # saltar lo que no es archivo de texto del repo
+            if not path.is_file() or ".git" in path.parts:
+                continue
+            if path.suffix.lower() in {".zip", ".gz", ".png", ".jpg",
+                                       ".jpeg", ".webp", ".ico", ".jar"}:
+                continue
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            if b"\x00" in data[:4096]:  # binario
+                continue
+            if len(data) > 2_000_000:  # archivos gigantes: fuera de alcance
+                continue
+            text = data.decode("utf-8", errors="ignore")
+            for match in self.RFC1918.finditer(text):
+                line = text.count("\n", 0, match.start()) + 1
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{line}: {match.group()}")
+        self.assertEqual(
+            [], offenders,
+            "IPs privadas (RFC 1918) detectadas en el repositorio — "
+            "remover o reemplazar por placeholders (192.168.x.y, <phone-ip>). "
+            "Política de privacidad del proyecto. Hallazgos:\n"
+            + "\n".join(offenders))
 
 
 if __name__ == "__main__":

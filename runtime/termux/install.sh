@@ -10,14 +10,16 @@
 #       - certificado y llave TLS propias
 #       - server.env con puerto/host autorizado
 #  5. Instala los atajos de Termux:Widget y el arranque de Termux:Boot.
-#  6. Parchea server.py y web/index.html (endpoint /api/mouse + cursor en tablet).
+#  6. Parchea server.py y web/index.html (endpoint /api/mouse + cursor en
+#     tablet + timestamps del log del bridge).
 #  7. Compila native/mouse-grab (EVIOCGRAB: respaldo del enrutado sin fantasma).
 #  8. Copia el subsistema de ASOCIACIÓN NATIVA (route-input.sh + jvm/):
 #     la vía principal del enrutado de mouse (APIs ocultas de InputManager).
 #  9. Verifica el camino de relay HEVC consolidado en server.py (v0.3.0,
 #     issue #4 cerrado) y copia hevc.py junto al server.
 #
-# Es idempotente: nunca sobrescribe tokens, TLS o configuración existentes.
+# Es idempotente: nunca sobrescribe tokens, TLS o configuración existentes
+# (las IPs de host/bind SÍ se sincronizan: ver secciones 2 y 5b).
 # No incluye secretos: todo el material sensible se crea en ~/.config/wtm.
 set -euo pipefail
 
@@ -68,11 +70,19 @@ if ! "$PREFIX/bin/python3" -c 'import aiohttp' >/dev/null 2>&1; then
 fi
 
 # --- 2. IP autorizada ------------------------------------------------------
+# Prioridad de detección (hallazgo de campo 2026-11-09, hotspot Samsung):
+#  1) swlan0 (interfaz del hotspot One UI): es la IP a la que la tablet puede
+#     llegar cuando el teléfono hace de AP. Con datos móviles activos, swlan0
+#     y rmnet coexisten, así que esta debe consultarse PRIMERO.
+#  2) wlan0 (Wi-Fi normal: red de casa/router).
+#  3) Fallback UDP (netlink restringido en Android moderno): devuelve la IP
+#     de la RUTA POR DEFECTO — con hotspot+datos activos es la IP de DATOS
+#     (rmnet), inalcanzable para la tablet. Último recurso, con aviso.
 if [ -n "${WTM_ALLOWED_HOSTS:-}" ]; then
     ALLOWED_HOSTS="$WTM_ALLOWED_HOSTS"
 else
-    ALLOWED_HOSTS="$(ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
-    [ -z "$ALLOWED_HOSTS" ] && ALLOWED_HOSTS="$(ip -4 addr show swlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
+    ALLOWED_HOSTS="$(ip -4 addr show swlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
+    [ -z "$ALLOWED_HOSTS" ] && ALLOWED_HOSTS="$(ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print $2}' | tr -d '\r' || true)"
     if [ -z "$ALLOWED_HOSTS" ]; then
         # Fallback sin netlink: un socket UDP no envía paquetes, solo consulta
         # al enrutador de Android qué IP local usaría hacia 8.8.8.8. Funciona
@@ -89,6 +99,13 @@ try:
         print(ip)
 except Exception:
     pass')"
+        if [ -n "$ALLOWED_HOSTS" ]; then
+            log "AVISO: IP detectada por el fallback de ruta por defecto ($ALLOWED_HOSTS)."
+            log "  Con hotspot + datos móviles activos esta puede ser la IP de DATOS"
+            log "  (inalcanzable para la tablet), no la del hotspot."
+            log "  Verifica con: ip -4 addr show swlan0 (hotspot) o wlan0 (Wi-Fi),"
+            log "  o reinstala con la IP explícita: WTM_ALLOWED_HOSTS=<ip> bash install.sh"
+        fi
     fi
     [ -z "$ALLOWED_HOSTS" ] && fail "No se detectó una IP LAN; define WTM_ALLOWED_HOSTS manualmente."
 fi
@@ -166,6 +183,18 @@ else
     fail "Falta tools/patch-mouse-endpoint.py en el paquete."
 fi
 
+# --- 3b-3. timestamps del log del bridge (parche idempotente) ---------------
+# Hallazgo de campo 2026-11-09: rd-bridge.log mezclaba carreras viejas y
+# nuevas sin marcas de tiempo. El parche redirige los prints etiquetados
+# ([server]/[hevc]/[client]) a una función log() con timestamp.
+if [ -f "$SOURCE_DIR/tools/patch-bridge-timestamps.py" ]; then
+    "$PREFIX/bin/python3" "$SOURCE_DIR/tools/patch-bridge-timestamps.py" \
+        "$INSTALL_DIR/server.py" || \
+        fail "El parche de timestamps del bridge falló; revisa el mensaje anterior."
+else
+    fail "Falta tools/patch-bridge-timestamps.py en el paquete."
+fi
+
 # --- 3b-2. verificar el camino HEVC consolidado (v0.3.0, issue #4) -----------
 # Desde v0.3.0 el server.py del paquete YA incluye el camino de relay HEVC
 # (no se parchea en despliegue). Verificación con ancla: si se despachara un
@@ -229,6 +258,7 @@ path, viewer, admin = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path, "w", encoding="utf-8") as handle:
     json.dump({"viewer": viewer, "admin": admin}, handle, indent=2)
 os.chmod(path, 0o600)
+
 print("token viewer:", viewer)
 print("token admin :", admin)
 PY
@@ -262,6 +292,14 @@ log "Huella SHA-256 del certificado: $FINGERPRINT"
 log "Guarda esta huella: al abrir la página en la tablet, compárala con la mostrada en /login."
 log "Si no coincide, NO introduzcas ningún token: la conexión puede estar interceptada."
 
+# --- 5b. server.env: crear o sincronizar host/bind con la IP actual ----------
+# Hallazgo de campo 2026-11-09: al migrar de red (router -> hotspot), install.sh
+# "conservaba" el server.env anterior sin más, y el bridge crashaba con
+# "could not bind" en una IP que ya no existía: la consola anunciaba la IP
+# nueva pero la configuración seguía apuntando a la vieja. Fix: las líneas
+# de host (WTM_ALLOWED_HOSTS / WTM_BIND_HOST) se SINCRONIZAN con la IP
+# detectada en esta corrida. Tokens, certificados y llaves NO se tocan
+# (la idempotencia de credenciales sigue intacta).
 ENV_FILE="$CONFIG_DIR/server.env"
 if [ ! -f "$ENV_FILE" ]; then
     umask 077
@@ -278,7 +316,20 @@ EOF
     chmod 600 "$ENV_FILE"
     log "Configuración escrita en $ENV_FILE."
 else
-    log "Se conserva $ENV_FILE existente."
+    OLD_BIND="$(sed -n 's/^WTM_BIND_HOST=//p' "$ENV_FILE" | head -1 | tr -d '\r')"
+    OLD_ALLOWED="$(sed -n 's/^WTM_ALLOWED_HOSTS=//p' "$ENV_FILE" | head -1 | tr -d '\r')"
+    if [ "$OLD_BIND" != "$BIND_HOST" ] || [ "$OLD_ALLOWED" != "$ALLOWED_HOSTS" ]; then
+        TMP_FILE="$(mktemp)"
+        sed -e "s/^WTM_BIND_HOST=.*/WTM_BIND_HOST=$BIND_HOST/" \
+            -e "s/^WTM_ALLOWED_HOSTS=.*/WTM_ALLOWED_HOSTS=$ALLOWED_HOSTS/" \
+            "$ENV_FILE" >"$TMP_FILE"
+        mv "$TMP_FILE" "$ENV_FILE"
+        chmod 600 "$ENV_FILE"
+        log "server.env sincronizado al cambio de red: BIND/ALLOWED $OLD_BIND -> $BIND_HOST."
+        log "(tokens y material TLS conservados intactos)."
+    else
+        log "Se conserva $ENV_FILE existente (host/bind ya correctos)."
+    fi
 fi
 
 # --- 6. atajos de Termux:Widget y Termux:Boot ------------------------------
@@ -319,3 +370,5 @@ log "jvm/inputfocus.zip están presentes (jvm/build.sh en una máquina con JDK).
 log "Desactiva todo el enrutado del mouse con MOUSE_ROUTE=0 en server.env."
 log "Codec: default HEVC (h265) desde v0.3.0 (issue #4: A/B medido)."
 log "Para volver a H.264: añade VIDEO_CODEC=h264 a server.env y reinicia."
+log "Cambio de red (hotspot<->Wi-Fi): bash $INSTALL_DIR/update-network.sh"
+log "re-detecta la IP, sincroniza server.env y regenera el certificado."

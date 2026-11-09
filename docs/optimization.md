@@ -8,12 +8,24 @@ current behavior — only performance.md makes claims.
 
 ## Baseline summary (see performance.md for full data)
 
-| Scenario | Observed (2026-11-06) |
+| Scenario | Observed |
 |---|---|
-| Simple controlled motion | ~57–60 decoded FPS, 23–26 ms mean latency, zero drops (short windows) |
-| App switching | ~27–46 decoded FPS, 33–45 ms mean |
-| High-motion / detailed content | Client collapses to ~13–14 FPS with 1.4–1.6 s decoder backlog |
-| Forced hardware decode (tablet) | Multi-second queues; software decode is the default |
+| Simple controlled motion (router Wi-Fi, 2026-11-06) | ~57–60 decoded FPS, 23–26 ms mean latency, zero drops (short windows) |
+| High-motion / detailed content (router Wi-Fi, 2026-11-06) | Client collapses to ~13–14 FPS with 1.4–1.6 s decoder backlog |
+| Codec A/B (router Wi-Fi, 2026-11-09) | Both legs ~30 decoded FPS with 60 configured (cap then unidentified) |
+| Real 4K60 content, hotspot transport (2026-11-09) | ~59.5–60.1 FPS sustained, 1 drop in ~2.5 min, rtt=3 ms, decode ~16–17 ms |
+
+## Transport verdict: hotspot (phone as AP) over router Wi-Fi
+
+Measured on 2026-11-09 on the tested pair: the same pipeline, same devices,
+same content class that delivered ~30 FPS over the owner's router Wi-Fi
+delivered sustained ~60 FPS over the phone's 5 GHz hotspot with `rtt=3 ms`
+and `net_ms ~8–10 ms`. The previously unidentified FPS cap (OPT-8) was the
+router transport, not the pipeline. The hotspot direct link is now the
+**recommended transport** for this workflow; router Wi-Fi remains a supported
+fallback but is a measured bottleneck on the reference network (see
+performance.md, 2026-11-09). No claim is made about other routers or
+networks: this is one measured pair, one reference router.
 
 ## Active backlog
 
@@ -59,18 +71,25 @@ decode latency (~30% less, 3x lower jitter peaks, zero sustained drops) for
 The client sends a 25 ms heartbeat to keep the tablet radio out of power-save
 (`hb` parameter). Open questions: actual duty-cycle cost, whether 40–50 ms
 achieves the same latency, and whether the server-side echo can be piggybacked
-onto the next frame instead of a standalone message.
+onto the next frame instead of a standalone message. NOTE (2026-11-09): the
+transport switch to the phone hotspot may change the relevant radio
+power-save behavior; re-measure on the hotspot link.
 
 ### OPT-4 — App-switch FPS dips
-Transition windows drop to ~27–46 FPS with occasional stale frames. Candidate:
-an IDR request on detected scene change (the relay already has `request_key`),
-and measuring whether the dip is encoder-side (source FPS drops too) or
-client-side.
+Transition windows drop to ~27–46 FPS with occasional stale frames (measured
+on router Wi-Fi). Candidate: an IDR request on detected scene change (the
+relay already has `request_key`), and measuring whether the dip is
+encoder-side (source FPS drops too) or client-side. Re-measure on the hotspot
+link, where the transport headroom is now larger.
 
 ### OPT-5 — Encoder settings sweep
 CRF/preset/GOP/bitrate are currently fixed defaults. A documented sweep on
 the S25 (thermal state held constant) should produce a recommended profile per
-content class. No change ships without a repeated A/B.
+content class. No change ships without a repeated A/B. **New justification
+(2026-11-09, hotspot test):** real 4K60 content pushed the encoder to the
+12 Mbps cap (observed 9.6–12.9 Mbps, rtt and net headroom abundant) — the
+first sweep target is a bitrate ladder (12 → 16 → 20 → 24 Mbps) to quantify
+what quality the link can carry without drops or latency regression.
 
 ### OPT-6 — Photon-to-photon instrumentation
 Current latency metrics end at decoder output (see performance.md caveats).
@@ -82,11 +101,15 @@ After client reconnect the relay serves a cached keyframe. Untested at scale:
 behavior under Wi-Fi roaming, phone reboot mid-session, and Chrome tab
 suspension on the tablet. Define expected UX and verify.
 
-### OPT-8 — FPS cap investigation (~30 delivered with 60 configured)
-Observed in the 2026-11-09 codec A/B: both legs delivered ~30 decoded FPS while
-the encoder is configured for 60 — identical in both legs, so the A/B is valid,
-but the cap's location (content frame rate vs encoder vs bridge) is
-unidentified. Investigate before any 60 FPS claim.
+### OPT-8 — FPS cap investigation (~30 delivered with 60 configured) — **CLOSED**
+Observed in the 2026-11-09 codec A/B (router Wi-Fi): both legs delivered ~30
+decoded FPS while the encoder is configured for 60. **Resolution (same day,
+hotspot migration): the same pipeline delivered sustained 59.5–60.1 FPS with
+real 4K60 content over the phone's 5 GHz hotspot — zero code changes.** The
+cap was the router transport, not the pipeline: the encoder, relay and
+decoder were never the limiter at 60 FPS for the tested content class.
+Evidence: performance.md (2026-11-09 hotspot test). Follow-up work moved to
+OPT-5 (the encoder now runs against the 12 Mbps cap).
 
 ## How to measure (rules)
 
@@ -98,6 +121,9 @@ unidentified. Investigate before any 60 FPS claim.
 - Five-second windows are not thermal or long-term evidence; declare the method
   before quoting any number, and never extrapolate a good window into a
   guarantee (see performance.md acceptance criteria).
+- Declare the transport (hotspot vs router Wi-Fi vs other) with every number:
+  the 2026-11-09 pair of tests shows the same content can deliver 30 or 60 FPS
+  purely by changing the link. Never quote FPS without the transport.
 
 ## Completed
 
@@ -109,3 +135,7 @@ unidentified. Investigate before any 60 FPS claim.
 - 2026-11-09 — v0.3.0: HEVC became the shipped default (measured A/B plus a
   long production session on this pair); patch-hevc-relay.py was removed after
   consolidating its patch into server.py. Documented rollback: `VIDEO_CODEC=h264`.
+- 2026-11-09 — Transport migration to the phone hotspot completed and measured:
+  sustained 60 FPS on real 4K60 content where the reference router delivered
+  ~30 (OPT-8 closed as a transport finding). Hotspot is the recommended
+  transport; see performance.md.
