@@ -17,7 +17,7 @@ Qué añade a server.py:
      nal[1]=0x01; AVC nunca emite NAL type 0) activa el modo HEVC; un SPS AVC
      lo desactiva. Sin VPS el camino H.264 queda byte-idéntico (default).
   4. En modo HEVC: slices VCL (types 0-31) → 1 NAL = 1 frame (misma
-     convención verificada del camino AVC), IDR (19/20) and CRA (21) como
+     convención verificada del camino AVC), IDR (19/20) y CRA (21) como
      keyframes, framing de 4 bytes igual que el camino AVCC existente.
 
 TEMPORAL: una vez validado el A/B en hardware, se consolida en el server.py
@@ -72,7 +72,7 @@ async def scrcpy_reader(state):'''
 STATE_OLD = '''        self.scrcpy_connected = False  # True while the scrcpy-server video stream is up'''
 STATE_NEW = '''        self.scrcpy_connected = False  # True while the scrcpy-server video stream is up
         self.hevc = False              # HEVC stream detected (VPS NAL): issue #4 A/B path
-        self.hevc_nals = {}            # HEVC NAL types 32/33/34 -> latest V/SPS/PPS
+        self.hevc_nals = {}            # HEVC NAL types 32/33/34 -> latest VPS/SPS/PPS
         self.hevc_key = None           # last (VPS, SPS, PPS) tuple that produced a config'''
 
 NAL_OLD = '''                for nal in parser.feed(chunk):
@@ -81,7 +81,7 @@ NAL_NEW = '''                for nal in parser.feed(chunk):
                     # --- Dispatch de codec HEVC (issue #4; inactivo salvo VPS) ---
                     if len(nal) >= 2 and nal[0] == 0x40 and nal[1] == 0x01:
                         # VPS HEVC (layer 0, tid+1=1). AVC nunca emite NAL type 0.
-                       if not state.hevc:
+                        if not state.hevc:
                             state.hevc = True
                             state.hevc_nals = {}
                             print("[scrcpy] stream HEVC detectado (VPS)", flush=True)
@@ -91,7 +91,7 @@ NAL_NEW = '''                for nal in parser.feed(chunk):
                         state.hevc_key = None
                         print("[scrcpy] stream AVC detectado (SPS); parser AVC", flush=True)
                     if state.hevc:
-                        ht = (nal[0] >> 1) & 0x2F
+                        ht = (nal[0] >> 1) & 0x3F
                         if ht in (32, 33, 34):  # VPS / SPS / PPS
                             state.hevc_nals[ht] = nal
                             await _hevc_maybe_config(state)
@@ -107,7 +107,8 @@ NAL_NEW = '''                for nal in parser.feed(chunk):
                             state.got_frame = True
                             await broadcast_frame(state, frame, is_key,
                                                   ts_us=int(time.time() * 1e6), proc_us=0)
-                            if time.monotonic() - t_stats >= 5:\-n                                print(f"[hevc] {n_frames/(time.monotonic()-t_stats):.1f} fps, "
+                            if time.monotonic() - t_stats >= 5:
+                                print(f"[hevc] {n_frames/(time.monotonic()-t_stats):.1f} fps, "
                                       f"{n_keys} IDR en {time.monotonic()-t_stats:.1f}s", flush=True)
                                 n_frames = 0; n_keys = 0; t_stats = time.monotonic()
                         continue  # SEI (39) y demás NAL no-VCL: se ignoran
@@ -121,7 +122,6 @@ REPLACEMENTS = [
 
 
 def patch_file(path):
-    
     with open(path, encoding="utf-8") as handle:
         src = handle.read()
     if "_hevc_maybe_config" in src:
@@ -129,14 +129,13 @@ def patch_file(path):
         return False
     for name, old, new in REPLACEMENTS:
         count = src.count(old)
-        patch_count = src.count(new)
         if count != 1:
             print(f"ERROR: ancla de {name} no única (encontrada {count} veces) en {path}; "
                   f"no se tocó nada. ¿server.py es la versión del repo?")
             sys.exit(1)
         src = src.replace(old, new)
     with open(path, "w", encoding="utf-8") as handle:
-        written = handle.write(src)
+        handle.write(src)
     print(f"parche aplicado: {path}")
     return True
 
@@ -146,7 +145,7 @@ def main():
     patch_file(server_path)
     py_compile.compile(server_path, doraise=True)
     print("server.py compila OK")
-    with open(server_path, encoding=""utf-8") as handle:
+    with open(server_path, encoding="utf-8") as handle:
         print(f"sha256 {server_path}: {hashlib.sha256(handle.read().encode()).hexdigest()}")
 
 
