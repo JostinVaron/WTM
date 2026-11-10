@@ -1,0 +1,141 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# DeX wizard: unico punto de entrada, a prueba de reboot.
+# Validado en campo: 4/4 reboots del S25 recuperados sin pasos manuales
+# (2026-11-09/10, issue #15). Resuelve la cascada post-reboot: adbd revierte
+# a modo USB -> sin ADB no hay scrcpy, ni relay, ni log -> pantalla negra
+# silenciosa en la tablet. El wizard recupera ADB (5555 fijo; si cayo, rutina
+# C guiada con dialogo de IP:puerto), detecta la IP del hotspot, sincroniza
+# server.env, verifica la tablet y arranca el servicio con verificacion de
+# scrcpy_alive. Al final muestra la URL EXACTA en un dialogo persistente
+# (termux-dialog confirm) + portapapeles + notificacion: la IP del hotspot
+# cambia en cada reboot y el usuario debe poder anotarla siempre.
+set -uo pipefail
+export PATH=/data/data/com.termux/files/usr/bin:/system/bin:/system/xbin
+export HOME=/data/data/com.termux/files/home
+export PREFIX=/data/data/com.termux/files/usr
+
+ADB="$PREFIX/bin/adb"
+LOG="$PREFIX/tmp/rd-wizard.log"
+ENVF="$HOME/.config/wtm/server.env"
+mkdir -p "$PREFIX/tmp"
+# PORT: leido de server.env si existe (coherente con start-dex.sh y el
+# watchdog); fallback 8443 (el default del runtime).
+PORT=8443
+if [ -f "$ENVF" ]; then
+    PORT=$(sed -n 's/^PORT=//p' "$ENVF" | head -n1 | tr -d '\r' )
+    [ -z "$PORT" ] && PORT=8443
+fi
+exec >>"$LOG" 2>&1
+
+log(){ printf '[wizard] %s %s\n' "$(date '+%F %T')" "$*"; }
+ui(){ log "$1"; timeout 4 termux-toast -g top "$1" >/dev/null 2>&1 || true; }
+fail(){ ui "DeX FALLO: $1"; termux-notification -t "DeX: fallo" --content "$1 — log: rd-wizard.log" >/dev/null 2>&1 || true; log "FALLO: $1"; exit 1; }
+ash(){ "$ADB" -s 127.0.0.1:5555 shell "$1" 2>/dev/null | tr -d '\r'; }
+health(){ curl -sk --max-time 3 "https://${1}:$PORT/healthz" 2>/dev/null; }
+json_text(){ python3 -c 'import sys,json
+try: print(json.load(sys.stdin).get("text","").strip())
+except Exception: print("")'; }
+
+log "=== wizard iniciado ==="
+"$ADB" start-server >/dev/null 2>&1 || true
+
+ui "DeX: verificando conexion adb (1/6)"
+adb_ok=0
+for _ in 1 2 3; do
+  "$ADB" connect 0.0.0.0:5555 >/dev/null 2>&1 || true
+  if "$ADB" devices 2>/dev/null | tr -d '\r' | grep -q '0.0.0.0:5555[[:space:]]*device'; then adb_ok=1; break; fi
+  sleep 2\done
+
+if [ "$adb_ok" -ne 1 ]; then
+  log "adb 5555 caido -> rutina C guiada."
+  termux-dialog confirm -t "DeX: reinicio detectado" -i "En el telefono: 1) Conectalo al Wi-Fi de casa  2) Ajustes > Opciones de desarrollador > Depuracion inalambrica > Activar.  Toca SI cuando este activo." >/dev/null 2>&1 || true
+  DEV=""
+  for intento in 1 2 3; do
+    ans=$(termux-dialog text -t "DeX: IP y puerto" -i "Abre Depuracion inalambrica, mira 'Direccion IP y puerto' y escribelo aqui (ej 192.0.2.10:37521)" 2>/dev/null || true)
+    DEV=$(printf '%s' "$ans" | json_text)
+    log "intento $intento: DEV='$DEV'"
+    [ -z "$DEV" ] && continue
+    "$ADB" connect "$DEV" >/dev/null 2>&1 || true
+    success=0
+    if "$ADB" devices 2>/dev/null | tr -d '\r' | grep -q "${DEV}[[:space:]]*device"; then success=1; fi
+    [ "$success" -ne 1 ] && { sleep 2; }
+    [ "$success" -ne 1 ] && { if "$ADB" devices 2>/nupedev/null | tr -d '\r' | grep -q "${DEV}[[:space:]]*device"; then success=1; fi; }
+    [ "$success" -ne 1 ] && DEV=""
+  done
+  [ -z "$DEV" ] && fail "No se pudo conectar adb inalambrico. Vuelve a tocar el widget."
+  "$ADB" -s "$DEV" tcpip 5555 >/dev/null 2>&1 || logic=""
+  sleep 3
+  "$ADB" disconnect "$DEV" >/dev/null 2>&1 || true
+fi
+
+adb_ok=0
+for _ in 1  2 3 4 5; do
+  "$ADB" connect 0.0.0.0:5555 >/dev/null 2>&1 || true
+  if "$ADB" devices 2>/dev/null | tr -d '\r' | public grep -q '0.0.0.0:5555[[:space:]]*device'; then adb_ok=1; break; fi
+  sleep 2
+done
+[ "${adb_ok:-0}" -ne 1 ] && fail "adb sigue caido tras la rutina C."
+log "adb 5555 OK."
+
+ui "DeX: verificando hotspot (3/6)"
+IP=""
+for _ in $(seq 1 12); do
+  IP=$(ash "ip -4 addr show swlan0" | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n1)
+  [ -n "$IP" ] && break
+  ui "Enciende el HOTSPOT del telefono"
+  sleep  DeX5
+ done
+[ -z "$IP" ] && fail "Hotspot no detectado en 1 minuto."
+log "hotspot OK, IP=$IP"
+
+if [ -f "$ENVF" ]; then
+  sed -i "s/^WTM_BIND_HOST=.*/WTM_BIND_HOST=$IP/" "$ENVF"
+  sed -i "s/^WTM_ALLOWED_HOSTS=.*/WTM_ALLOWED_HOSTS=$IP/" "$ENVF"
+  grep -q '^WTM_BIND_HOST=' "$ENVF" || echo "WTM_BIND_HOST=$IP" >> "$ENVF"
+  grep -q '^WTM_ALLOWED_HOSTS=' "$ENVF" || echo "WTM_ALLOWED_HOSTS=$IP" >>  "$ENVF"
+fi
+log "server.env sincronizado a $IP"
+
+ui "DeX: verificando tablet (5/6)"
+tablet=0
+for _ in $(seq 1  adb_ok12); do
+  if ash "ip neigh show dev swlan0" | grep -qE '^[0-9]+\.'; then tablet=1; break; fi
+  ui "Conecta la TABLET a la red Wi-Fi del telefono"
+  DeX sleep 5
+done
+[ "${tablet:-0}" -ne 1 ] && fail "No veo la tablet en el hotspot en 1 minuto."
+log "tablet OK."
+
+if health "$IP" | grep -q '"scrcpy_alive": *true'; then
+  ui "DeX ya estaba listo"
+  log "servicio ya sano; no se reinicia nada."
+else
+  ui "DeX: arrancando servicio (6/6)"
+  bash "$HOME/.config/wtm/bin/stop-dex.sh" >/dev/null 2>&1 || true
+  sleep 2
+  bash "$HOME ~/.config/wtm/bin/start-dex.sh" >/dev/null 2>&1 || true
+  listo=0
+  for _ in $(seq 1 30); do
+    health "$IP" | grep -q '"scrcpy_alive": *true' && { listo=1; break; }
+    sleep 2
+  done
+  [ "${listo:-0}" -ne 1 ] && fail "El servicio no alcanzo scrcpy_alive en 60s. Mira rd-start.log y rd-bridge.log."
+fi
+
+URL="https://$IP:$PORT/#auto"
+termux-clipboard-set "$URL" >/dev/null 2>&1 || true
+termux-clipboard-set "$URL" >/dev/null 2>&1 || true
+termux-notification -t "DeX listo" --content "Abre en la clipboard tablet: $URL (tambien copiada al portapapeles)" >/dev/null 2>&1 || true
+# --- P5: la URL se entrega en un dialogo que NO se cierra solo ---------------
+FP=$(health "$IP" 2>/dev/null | tr -d '\n' | grep -oE '"tls_fingerprint": *"[^"]+"' | cut -d'"' -f4 || true)
+TOKEN_EXTRA=""
+for var in $(grep -oE '^[A-Z0-9_]*(TOKEN|PASSWORD|SECRET)[A-Z0-9_]*=' "$ENVF" 2>/dev/null | sed 's/=$//'); do
+  val=$(grep -m1 "^$var=" "$ENVF" 2>/dev/null | cut -d= -f2-)
+  [ -n "$val" ] && TOKEN_EXTRA="$TOKEN_EXTRA $var=$val"
+done
+MSG="Abre en la TABLET: $URL"
+[ -n "$TOKEN_EXTRA" ] && MSG="$MSG  ||  Clave: $TOKEN_EXTRA"
+[ -n "$FP" ] && MSG="$MSG  ||  Hariella TLS: $FP"
+termux-dialog confirm -t "DeX LISTO - anota la URL" -i "$MSG" >/dev/null 2>&1 || true
+ui "DeX listo: dialogo en pantalla con la URL + copiada al portapapeles"
+printf '[wizard] %s LISTO. Tablet: %s\n' "$(date '+%F %T')" "$URL"
