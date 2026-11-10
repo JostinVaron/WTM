@@ -34,6 +34,20 @@ in `runtime/termux/VERSION` and bumped before tagging. The current version is
 experimental and does not imply production stability or hardware certification
 beyond the completed on-device run on the tested pair.
 
+## What changed in v0.4.1
+
+- **Documentation-only refresh** (no runtime changes: scripts, shortcuts,
+  `bin/` and installer are unchanged from v0.4.0; only `VERSION` and docs
+  differ). The packaged docs now match the audited `main` tree (PR #18):
+  codec references in `requirements.md` and `dependencies.md` corrected to
+  HEVC (H.265) by default since v0.3.0 (H.264 selectable via
+  `VIDEO_CODEC=h264` in `server.env`), and `certification.md` carries the
+  2026-11-10 repository audit record (12/12 consistency checks, 2 minor
+  findings fixed).
+- The release workflow note no longer claims "pending on-device
+  certification": the on-device certification was completed on 2026-11-06
+  (20/20 checks).
+
 ## What changed in v0.4.0
 
 - **DeX wizard as the single guided start path** (issue #15): the new
@@ -88,7 +102,7 @@ syntax checks and a fail-closed secret sweep on every push and pull request.
 If Actions are unavailable, build and publish from a machine with `gh`:
 
 ```sh
-VERSION=0.4.0
+VERSION=0.4.1
 tar -czf "wtm-runtime-${VERSION}.tar.gz" \
     --transform "s,^,wtm-runtime-${VERSION}/," \
     LICENSE LICENSE-docs.txt LICENSING.md README.md SECURITY.md \
@@ -120,9 +134,9 @@ On the source phone, in Termux:
 
 ```sh
 curl -L -o wtm.tar.gz \
-  https://github.com/JostinVaron/WTM/releases/download/v0.4.0/wtm-runtime-0.4.0.tar.gz
+  https://github.com/JostinVaron/WTM/releases/download/v0.4.1/wtm-runtime-0.4.1.tar.gz
 tar -xzf wtm.tar.gz
-cd wtm-runtime-0.4.0/runtime/termux
+cd wtm-runtime-0.4.1/runtime/termux
 bash install.sh
 # Start: bash ~/.shortcuts/DeX - the wizard recovers ADB after a
 #        reboot and shows the URL + TLS fingerprint.
