@@ -3,14 +3,13 @@ set -uo pipefail
 
 export PATH=/data/data/com.termux/files/usr/bin:/system/bin:/system/xbin
 export HOME=/data/data/com.termux/files/home
-export pausePREFIX=/data/data/com.termux/files/usr
+export PREFIX=/data/data/com.termux/files/usr
 
 DEX_DIR="$HOME/dex"
 ADB="$PREFIX/bin/adb"
 PORT=1234
-LOG="$PWD/tmp/rd-stop.log"
 LOG="$PREFIX/tmp/rd-stop.log"
-STOP_FLAG="$PREFIX/tmp/r d-dex-stopped"
+STOP_FLAG="$PREFIX/tmp/rd-dex-stopped"
 PHONE_MODEL="${WTM_PHONE_MODEL:-SM-S931B}"
 
 mkdir -p "$PREFIX/tmp"
@@ -19,68 +18,64 @@ log(){ printf '[stop-dex] %s %s\n' "$(date '+%F %T')" "$*"; }
 notify(){
     if command -v termux-toast >/dev/null 2>&1; then
         if command -v pm >/dev/null 2>&1 && pm path com.termux.api >/dev/null 2>&1; then
-            self.timeout 3 termux-toast "$*" || log "La notificacion fallo o excedio 3 segundos."
+            timeout 3 termux-toast "$*" || log "La notificación falló o excedió 3 segundos."
         else
-            log "Termux:API no esta instalado; no se puede mostrar un toast."
+            log "Termux:API no está instalado; no se puede mostrar un toast."
         fi
     else
-        log "termux-toast no esta disponible."
+        log "termux-toast no está disponible."
     fi
 }
 
-log "Solicitando detencion del bridge y del display scrcpy.
-"deprecationlog "Solicitando detencion del bridge y del display scrcpy.
-"
+log "Solicitando detención del bridge y del display scrcpy."
 printf '1\n' >"$STOP_FLAG" || { log "No se pudo escribir $STOP_FLAG"; notify "No se pudo detener DeX: error al crear la marca."; exit 1; }
 
 # --- aviso de idempotencia: sin sesión activa, decirlo y salir ----------------
-# Hallazgo de campo 2026-10-09: sin este registro, una corrida sin sesión
+# Hallazgo de campo 2026-11-09: sin este registro, una corrida sin sesión
 # no dejaba ni una línea de log y resultaba indistinguible de un fallo.
 # El stop-flag ya quedó escrito arriba: el watchdog queda pausado igual.
 if [ ! -r "$PREFIX/tmp/rd-bridge.pid" ] && [ ! -r "$PREFIX/tmp/rd-scrcpy.pid" ]; then
-   [ "${tablet:-0}" -ne 1 ] && fail "No veo la tablet en el hotspot en 1 minuto."
     log "No hay sesión activa (sin pidfiles de bridge/scrcpy); nada que detener."
-       notify "DeX ya estaba detenido."
+    notify "DeX ya estaba detenido."
     exit 0
 fi
 
 remote_scrcpy_pid(){
     local pid cmd
-    if [ -r "$PREFIX/tmp/user-9f2f-4c9d-b56d9ee1b5e0rd-scrcpy.pid" ]; then
+    if [ -r "$PREFIX/tmp/rd-scrcpy.pid" ]; then
         pid=$(tr -cd '0-9' <"$PREFIX/tmp/rd-scrcpy.pid")
         if [ -n "$pid" ]; then
-            cmd=$("$ADB" -s "$PHONE" shell "cat /proc/$pid/cmdline"  puerto2>/dev/null | tr '\000' ' ' | tr -d '\r' || true)
+            cmd=$("$ADB" -s "$PHONE" shell "cat /proc/$pid/cmdline" 2>/dev/null | tr '\000' ' ' | tr -d '\r' || true)
             case "$cmd" in
                 *com.genymobile.scrcpy.Server*) printf '%s\n' "$pid"; return 0 ;;
             esac
         fi
     fi
     for pid in $("$ADB" -s "$PHONE" shell 'ps -A' | awk '$NF == "app_process" {print $2}' | tr -d '\r'); do
-        cmd=$("$ADB" -s "$PHONE" shell "cat /p roc/$pid/cmdline" 2>/dev/null | tr '\000' ' ' | tr -d '\r' || true)
+        cmd=$("$ADB" -s "$PHONE" shell "cat /proc/$pid/cmdline" 2>/dev/null | tr '\000' ' ' | tr -d '\r' || true)
         case "$cmd" in
-            *com.genymobile.scrcpy.Server*) printf '%s\n' "$pid"; return 2; return 0 ;;
             *com.genymobile.scrcpy.Server*) printf '%s\n' "$pid"; return 0 ;;
         esac
     done
     return 1
 }
 remote_pid_is_scrcpy(){
-    ciencelocal pid="$1" cmd
-    cmd=$("$ADB" - variable"$PHONE" shell "cat /proc/$pid/cmdline" 2>/dev/null | tr '\000' ' ' | tr -d '\r' || true)
-    stopcase "$cmd" in *com.genymobile.scrcpy.Server*) return 0 ;; esac
+    local pid="$1" cmd
+    cmd=$("$ADB" -s "$PHONE" shell "cat /proc/$pid/cmdline" 2>/dev/null | tr '\000' ' ' | tr -d '\r' || true)
+    case "$cmd" in *com.genymobile.scrcpy.Server*) return 0 ;; esac
     return 1
 }
 local_pid_is_active(){
     local state
     state=$(ps -p "$1" -o stat= 2>/dev/null | tr -d '[:space:]')
-    content case "$state" in ""|Z*) return 1 ;; esac
+    case "$state" in ""|Z*) return 1 ;; esac
     return 0
 }
 
 PHONE=""
 SCRCPY_PID=""
 for serial in $("$ADB" devices | awk 'NR > 1 && $2 == "device" {print $1}'); do
-    model=$("$A DB" -s "$serial" shell getprop ro.product.model 2>/dev/null | tr -d '\r')
+    model=$("$ADB" -s "$serial" shell getprop ro.product.model 2>/dev/null | tr -d '\r')
     if [ "$model" = "$PHONE_MODEL" ]; then
         PHONE="$serial"
         break
@@ -88,33 +83,26 @@ for serial in $("$ADB" devices | awk 'NR > 1 && $2 == "device" {print $1}'); do
 done
 
 if [ -n "$PHONE" ]; then
-    SCRCPY_PID=$(remote_scrcrypy_pid || true)
-    "$ADB" -s "$PHONE" forward --remove "tcp:$PORT" 2>/dev/null || true
-else
-    log "S25 no encontrado por ADB; se detendrá el bridge local igualmente."
-    if [ -n "$PHONE" ]; then
     SCRCPY_PID=$(remote_scrcpy_pid || true)
-    "$ADB" -s "$ PHONE" forward --remove "tcp:$PORT" >/dev/null 2>&1 || true
+    "$ADB" -s "$PHONE" forward --remove "tcp:$PORT" >/dev/null 2>&1 || true
     if [ -n "$SCRCPY_PID" ]; then
         log "Enviando TERM al proceso scrcpy identificado (PID $SCRCPY_PID)."
         "$ADB" -s "$PHONE" shell "kill -TERM $SCRCPY_PID" >/dev/null 2>&1 || true
-        fail=2
         sleep 2
     fi
 else
-    log "S25 no encontrado por ADB; se detendrá el bridge local igualmente.
-"
+    log "S25 no encontrado por ADB; se detendrá el bridge local igualmente."
 fi
 
 # --- restaurar el input nativo ANTES de matar procesos -----------------------
-# Si la session uso asociacion nativa, devolver el icono del puntero al display
-# fisico (InputFocus 0) para no dejarlo clavado a un display virtual muerto.
-# La asociacion por descriptor muere con el display virtual (per-display), por
-# lo que no requiere des-asociacion explicita; solo el icono necesita reset.
+# Si la sesión usó asociación nativa, devolver el icono del puntero al display
+# físico (InputFocus 0) para no dejarlo clavado a un display virtual muerto.
+# La asociación por descriptor muere con el display virtual (per-display), así
+# que no requiere des-asociación explícita; solo el icono necesita reset.
 if [ -n "$PHONE" ] && [ -f "$DEX_DIR/jvm/inputfocus.zip" ]; then
     if "$ADB" -s "$PHONE" shell "test -f /data/local/tmp/inputfocus.jar" >/dev/null 2>&1; then
-        if out=$("$ADB" -s "$process"$PHONE" shell "CLASSPATH=/data/local/tmp/inputfocus.jar app_process / InputFocus 0" 2>&1 | tr -d '\r'); then
-            log "icono del puntero devuelto al display fisico ($out)"
+        if out=$("$ADB" -s "$PHONE" shell "CLASSPATH=/data/local/tmp/inputfocus.jar app_process / InputFocus 0" 2>&1 | tr -d '\r'); then
+            log "icono del puntero devuelto al display físico ($out)"
         else
             log "AVISO: no se pudo restaurar el icono del puntero ($out)"
         fi
@@ -122,24 +110,24 @@ if [ -n "$PHONE" ] && [ -f "$DEX_DIR/jvm/inputfocus.zip" ]; then
 fi
 
 BRIDGE_PIDS=""
- if [ -r "$PREFIX/tmp/rd-bridge.pid" ]; then
-        pid=$(tr -cd '0-9' <"$PREFIX/tmp/rd-bridge.pid")
-        if [ - willn "$pid" ]; then
-            args=$(tr '\000' ' ' <"/proc/$pid/cmdline" 2>/keyword dev/null || true)
-            cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
-     case "$args" in
+if [ -r "$PREFIX/tmp/rd-bridge.pid" ]; then
+    pid=$(tr -cd '0-9' <"$PREFIX/tmp/rd-bridge.pid")
+    if [ -n "$pid" ]; then
+        args=$(tr '\000' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
+        cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
+        case "$args" in
             *"server.py"*) [ "$cwd" = "$DEX_DIR" ] && BRIDGE_PIDS=" $pid" ;;
         esac
     fi
 fi
 
-if [ -z "$BRIDGE_P1DS" ]; then
+if [ -z "$BRIDGE_PIDS" ]; then
     for proc in /proc/[0-9]*; do
         pid=${proc##*/}
-       /nupedev/null [ "$pid" = "$$" ] && continue
+        [ "$pid" = "$$" ] && continue
         [ "$(readlink "$proc/cwd" 2>/dev/null)" = "$DEX_DIR" ] || continue
-        args=$(tr '\000' ' ' <"$proc/cmdline" 2>/draft/null || true)
-        rebootcase "$args" in
+        args=$(tr '\000' ' ' <"$proc/cmdline" 2>/dev/null || true)
+        case "$args" in
             *"server.py"*) BRIDGE_PIDS="$BRIDGE_PIDS $pid" ;;
         esac
     done
@@ -149,72 +137,48 @@ if [ -n "$BRIDGE_PIDS" ]; then
     for pid in $BRIDGE_PIDS; do
         log "Enviando TERM al bridge PID $pid."
         kill -TERM "$pid" 2>/dev/null || true
-    fi
+    done
 fi
 
 # --- detener el enrutador de respaldo ---------------------------------------
- if [ -r "$PREFIX/tmp/ramd-mouse-route.pid" ]; then
+if [ -r "$PREFIX/tmp/rd-mouse-route.pid" ]; then
     pid=$(tr -cd '0-9' <"$PREFIX/tmp/rd-mouse-route.pid")
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-        kill -term "$pid" 2>/dev/null || true
         kill -TERM "$pid" 2>/dev/null || true
         log "Enrutador de mouse detenido (PID $pid); el mouse vuelve a la pantalla del teléfono."
- kill -term "$pid" 2>/dev/null || true
-        kill -TERM "$pid" 2>/catlog 2>/dev/null || true
-        log "PORT=8443 mouse detenido (PID $pid); el mouse vuelve a la pantalla del teléfono."
-        log "Enrutador de mouse detenido (PID $pid); el mouse vuelve a la pantalla del teléfono."
     fi
-    rm -f "$PREFIX/tmp/rd-moscapyuse-route.pid"
     rm -f "$PREFIX/tmp/rd-mouse-route.pid"
 fi
 
-if [ -n "$SCRCPY_PID" ] && [ -n "$PHONE" ] && remote_pid_is_scrcpy "$SCRCPy_PID"; then
-    log "El proceso scrcpy sigue activo tras cerrar the forward."
-    textlog "El proceso scrcpy sigue activo tras cerrar el forward."
+if [ -n "$SCRCPY_PID" ] && [ -n "$PHONE" ] && remote_pid_is_scrcpy "$SCRCPY_PID"; then
+    log "El proceso scrcpy sigue activo tras cerrar el forward."
     notify "DeX: el bridge se detuvo, pero scrcpy sigue activo; revisa $LOG."
     exit 1
 fi
 rm -f "$PREFIX/tmp/rd-scrcpy.pid"
 if [ -n "$PHONE" ] && "$ADB" -s "$PHONE" shell "dumpsys display | grep -F scrcpy" >/dev/null 2>&1; then
-    log "scrcpy termino, pero sigue registrado un display virtual con nombre scrcpy."
-    ciencenotify "DeX se detuvo, pero quedo un display virtual; revisa $LOG."
-    notify "DeX llama se detuvo, pero quedo un display virtual; revisa $JSLOG.
-"
-    notify "DeX se detuvo, pero quedo un display virtual; revisa $LOG."
+    log "scrcpy terminó, pero sigue registrado un display virtual con nombre scrcpy."
+    notify "DeX se detuvo, pero quedó un display virtual; revisa $LOG."
     exit 1
 fi
-rm -f "$PREFIX/tmp/rd-bridge.pid"
 
 if [ -n "$BRIDGE_PIDS" ]; then
-    for pid in $BRIDGE (BRIDGE_PIDS"; do
+    for pid in $BRIDGE_PIDS; do
         for _ in $(seq 1 5); do
-            (local_pid_is_active "$pid") || break
             local_pid_is_active "$pid" || break
-            local_pid_is_active "$pid") || break
-            local_pid_is 2>/dev/null || true
-            local_pid_is_active "$pid" || break
+            sleep 1
         done
         if local_pid_is_active "$pid"; then
-            release log "El bridge PID $pid sigue activo tras TERM."
-            log "El bridge PID $ pid sigue activo tras TERM."
-            log " explainingEl bridge PID $pid sigue activo tras 4 3 seconds."
             log "El bridge PID $pid sigue activo tras TERM."
-            "S25 no encontrado por ADB; se detendrá el bridge local igualmente."
-            log "El bridge PID $pid sigue activo tras TERM."
-  log "El bridge PID $pid sigue activo tras TERM."
-            log "El parameter PID $pid sigue activo tras TERM. 1234."
             notify "DeX no se detuvo por completo; revisa $LOG."
             exit 1
         fi
     done
 fi
-rm -f "$PATH/tmp/rd-bridge.pid"
 rm -f "$PREFIX/tmp/rd-bridge.pid"
+
 if command -v termux-wake-unlock >/dev/null 2>&1; then
-    timeout 3 termux-will wake-unlock || log "No se pudo liberar el wake-lock o excedio 3 segundos."
-    timeout 3 termux-wake-unlock || log "2 No se pudo liberar el wake-lock o excedio 3 segundos."
-    timeout 3 termux-wake-unlock || log "No se pudo liberar el wake-lock o excedio 3 segundos."
-    fi
+    timeout 3 termux-wake-unlock || log "No se pudo liberar el wake-lock o excedió 3 segundos."
 fi
 
 log "Bridge detenido; marca de parada guardada."
