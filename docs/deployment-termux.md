@@ -102,6 +102,7 @@ best-effort: after a reboot the user taps `DeX` and the wizard
 recovers ADB (or guides the Wireless Debugging dialog), re-detects
 the hotspot IP and starts the service. The legacy watchdog path
 below still exists as a fallback.
+
 ## Boot and recovery behavior
 
 `$HOME/.termux/boot/01-dex.sh` attempts to obtain a wake lock and start

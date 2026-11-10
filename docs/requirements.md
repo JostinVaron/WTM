@@ -30,13 +30,14 @@ The project has only been exercised on the baseline pair above. Therefore:
   in the tested tablet class (~3.4 GiB MemTotal, 60 Hz display, current Chrome/WebCodecs).
   This is a conservative planning target, not a proven minimum.
 - **Recommended for future testing:** at least 8 GB marketed RAM on the source and 4 GB
-  marketed RAM on the viewer, modern hardware H.264 encoding on the source, a current
+  marketed RAM on the viewer, modern hardware HEVC encoding on the source, a current
   Chrome release with WebCodecs, and thermal headroom. This recommendation is an
   engineering estimate and needs testing on additional devices.
 - **Processor:** 64-bit ARM Android is the only observed architecture. Eight logical
   CPUs are the tested baseline; no lower-core threshold has been established.
 - **Graphics:** no specific GPU can be declared required from available measurements.
-  The source requires an Android H.264 encoder usable by scrcpy. The viewer's observed
+  The source requires an Android HEVC encoder usable by scrcpy (H.264 remains
+  selectable). The viewer's observed
   software-decoder path outperformed forced hardware decoding on this tablet.
 
 Do not advertise these estimates as guaranteed compatibility. A future release needs a
@@ -78,7 +79,9 @@ presented as photon-to-photon latency. See [performance evidence](performance.md
 
 - Both devices need reliable local IP connectivity to the relay. The current lab layout
   used the S25 as the relay host and the tablet as an HTTPS/WebSocket client.
-- Current encoder configuration is 12 Mbps H.264; one complex-motion test reported
+- Current encoder configuration is 12 Mbps HEVC (H.265) by default since
+  v0.3.0 (H.264 selectable via `VIDEO_CODEC=h264` in `server.env`).
+  One complex-motion test under the earlier H.264 default reported
   transient client-side rates of about 62-70 Mbps. That transient telemetry is not a
   network capacity guarantee, but demonstrates that a simple “12 Mbps is enough” claim
   is unsafe for every scene.

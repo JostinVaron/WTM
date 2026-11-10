@@ -15,8 +15,8 @@ is packaged or installed by a single installer.
 | Android Debug Bridge | Android-tools / ADB 37.0.0 observed | Device discovery, server launch, control and TCP-to-abstract-socket forwarding |
 | `curl` / OpenSSL | 8.23.0 / 3.6.5 observed | Health checks and TLS support |
 | Bash, coreutils, procps, awk/sed/grep | Used by launcher/watchdog scripts | Process discovery, logs and orchestration |
-| scrcpy Android server | Version 5.0.1 in the active implementation | Virtual display capture, H.264 encoding and input/control protocol |
-| Chrome on Android | Must provide WebCodecs in a secure context | H.264 decode and canvas rendering |
+| scrcpy Android server | Version 5.0.1 in the active implementation | Virtual display capture, HEVC (H.265) encoding by default since v0.3.0 (H.264 selectable), input/control protocol |
+| Chrome on Android | Must provide WebCodecs in a secure context | HEVC/H.264 decode (HEVC by default since v0.3.0) and canvas rendering |
 | Bash and Android shell tools | Used by launcher scripts | `bash`, `awk`, `grep`, `sed`, `tr`, `ps`, `setsid`, `app_process`, `am`, `wm`, `dumpsys`, `input` and related utilities |
 | `curl` | Used by scripts for health checks and local HTTPS requests | Startup/status checks |
 | Termux:Widget | Optional UI integration, if installed and granted shortcut access | Start/stop one-tap shortcuts |

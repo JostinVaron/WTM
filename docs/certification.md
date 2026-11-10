@@ -91,9 +91,9 @@ re-run the 20-check certification.
 - Real Chrome/WebCodecs decode on the tablet (the 2K60 performance evidence
   in [performance](performance.md) remains the reference; no new measurement
   was taken during this work).
-- Long-duration stability, thermal behavior, reboot recovery or Wi-Fi handover. (Reboot recovery has since been
-  measured separately: 4/4 via the DeX wizard, 2026-11-10; see the
-  section above.)
+- Long-duration stability, thermal behavior or Wi-Fi handover. Reboot recovery has since been
+  measured separately: 4/4 via the DeX wizard, 2026-11-10 (see the
+  section above).
 - Any guarantee of security: passing these tests means the implemented
   controls behave as specified, not that the system is invulnerable. See
   [threat-model](threat-model.md) for the complete model, including residual
@@ -108,6 +108,7 @@ re-run the 20-check certification.
 | 2026-11-06 | Independent AI re-audit (external, v2) — commit `69d53c3` | Repository-wide post-governance | 16 findings: verified all governance changes present; flagged stale README status text, CI secret sweep failing open when `rg` is missing, hardcoded watchdog port, divergent server default port (8090 vs 8443), absent private vulnerability channel | PR #2 (`fix/runtime-consistency`) landed README status sync, `watchdog.sh` loads `server.env`, `SECURITY.md` token-rotation procedure and throttle description, this review record. CI green on the PR |
 | 2026-11-06 | Owner follow-up after PR #2 (this repository, verified by 26-test suite and CI) | CI sweep, port default, vulnerability reporting | Closed the remaining items the external PR could not: CI secret sweep now fails closed (installs/guards ripgrep, broadened patterns with the scrcpy checksum exception, workflow files excluded from self-match), `server.py` PORT default unified to 8443, private vulnerability reporting enabled and SECURITY.md updated | Pushed to `main`; CI green; release v0.1.2 |
 | 2026-11-08 | AI repository audit (assistant-led, read-only against the live tree) | Repository-wide consistency vs. the completed on-device certification | Found 7 files with statements contradicting the completed certification (`AGENTS.md` §2 "pending", `SECURITY.md` "has not been exercised", `docs/deployment-termux.md` "not deployed / not yet hardware-certified", `docs/runtime-release-candidate.md` "not yet deployed", `docs/publishing.md` "no GitHub Release exists", `docs/architecture.md` "do not publish the server source" + "repository does not publish runtime code", `README.md` prototype-status paragraph); also found the v0.2.0 tarball ships only 6 of the 14 README-linked docs | All 7 files synchronized to the certified state and the release workflow updated to package all 14 docs on branch `fix/docs-sync-v0.2.1`; fixes verified on the live tree after commit. Review was read-only; no device, network or code behavior was tested |
+| 2026-11-10 | AI repository audit (assistant-led, read-only against the live tree) | Repository-wide consistency vs. v0.4.0 | 12/12 checks passed: VERSION, README, SECURITY, certification, releases, deployment, requirements, dependencies, CI/release workflows, shortcuts and `bin/` all consistent; 2 minor findings — stale H.264 references in dependencies/requirements predating the v0.3.0 HEVC default, and cosmetic bullet/blank-line issues — both fixed on `fix/docs-codec-sync` | Read-only against `main` 3be774a; no device, network or code behavior was tested |
 
 ## Certification criteria status
 
