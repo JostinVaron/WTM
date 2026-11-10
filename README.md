@@ -30,10 +30,10 @@ bash install.sh        # installs packages, verifies the scrcpy server, generate
 
 # 2. Start DeX with the one-tap wizard (Termux:Widget "DeX" shortcut, or):
 bash ~/.shortcuts/DeX
-#    The wizard recovers ADB after a reboot (guided Wireless Debugging dialog
-#    if port 5555 is down), detects the hotspot IP, syncs server.env, verifies
-#    the tablet, starts the service, and shows the exact URL + TLS fingerprint
-#    in a persistent dialog (also copied to the clipboard).
+#    The wizard recovers ADB after a reboot (guided Wireless Debugging
+#    dialog if port 5555 is down), detects the hotspot IP, syncs server.env,
+#    verifies the tablet, starts the service, and shows the exact URL +
+#    TLS fingerprint in a persistent dialog (also copied to the clipboard).
 
 # 3. On the tablet, open Chrome at the URL shown by the wizard and
 #    compare the certificate fingerprint with the one shown in the wizard
@@ -77,15 +77,14 @@ contains: [releases](docs/releases.md) · verified evidence:
   1.4-1.6 s of decoder delay in one test. App-switch windows measured about 27-46 FPS.
 - For this tablet, WebCodecs software decoding performed substantially better than the
   forced hardware path in the observed A/B test. The browser defaults to software.
+- **Post-reboot start is verified on this pair (2026-11-10): the DeX wizard
+  recovered the session after 4 of 4 real reboots of the S25** (issue #15),
+  including full adbd fallback to USB mode and hotspot IP changes; the only
+  manual step is the guided Wireless Debugging dialog when `adb tcpip 5555`
+  is unreachable. The wizard prints the exact URL and TLS fingerprint after
+  every start, because the hotspot IP changes on every reboot.
 - Touch/input forwarding and the virtual-display pipeline have been used on this pair,
   but there is no formal compatibility or long-duration reliability certification.
-- **Post-reboot start is verified on this pair (2026-11-10): the DeX wizard
-  recovered the session after 4 of 4 real reboots of the S25** — including full
-  adbd fallback to USB mode and hotspot IP changes — with a guided Wireless
-  Debugging dialog as the only manual step when `adb tcpip 5555` is unreachable
-  (see [deployment guide](docs/deployment-termux.md), issue #15). The wizard
-  also prints the exact URL and TLS fingerprint after every start, because the
-  hotspot IP changes on every reboot.
 - Bluetooth mouse routing to the virtual display has been restored and verified working
   on this pair (2026-11-07): the phone's paired physical mouse drives the virtual
   display only — no ghost input on the phone screen, with the real Samsung cursor.
@@ -97,7 +96,7 @@ contains: [releases](docs/releases.md) · verified evidence:
   long production session on this pair validated it; the evidence and caveats are in
   [hevc-study.md §7](docs/hevc-study.md).
 
-Measurements are conditional on scene complexity, transition, device temperature, foreground
+Measurements are conditional on scene complexity, transport, device temperature, foreground
 state, browser behavior, and battery/thermal management. See
 [Performance and test evidence](docs/performance.md) and the
 [optimization backlog](docs/optimization.md).
@@ -107,7 +106,7 @@ state, browser behavior, and battery/thermal management. See
 ```text
 S25 Android virtual display (2000 x 1200)
         │
-        ├─ scrcpy-server 5.0.1 / Android MediaCodec / HEVC (default) or H.265
+        ├─ scrcpy-server 5.0.1 / Android MediaCodec / HEVC (default) or H.264
         │  abstract video + control sockets
         ▼
 Termux ADB local forward (TCP 1234)
@@ -150,28 +149,29 @@ hotspot or Wi-Fi; Bluetooth is not used for video.
 
 ## Important limitations
 
-1. **Termux is in the runtime path.** The relay, local ADB server/forward, launcher,
+1. **Termux is in the runtime path.** The relay, local ADB server/forward, logs, launcher,
    and watchdog are Termux processes. Force-stopping Termux or Android killing it can
-   interrupt the stream. `nohup` Termux and a wake lock do not make a process an Android system
+   interrupt the stream. `nohup` and a wake lock do not make a process an Android system
    service.
 2. **ADB must be available and authorized.** Android can disable Wireless
-   Debugging or change its TCP port after a reboot. **Since v0.4.0 the DeX wizard
-   automates post-reboot ADB recovery** (fixed port 5555 when the daemon kept it; guided
-   Wireless Debugging dialog otherwise), verified 4/4 on the S25 — but it cannot
-   enable Developer Options or accept the pairing dialog for the user. A USB
-   connection remains an alternative ADB transport where supported.
-3. **60 FPS is a cap, limitation of measurement, not an end-to-end guarantee.** The phone can produce near-60 FPS
+   Debugging or change its TCP port after a reboot. Saved pairing keys do not guarantee
+   that the debugging service remains enabled. A USB connection is an alternative ADB
+   transport where supported. Since v0.4.0 the DeX wizard automates post-reboot
+   ADB recovery (fixed port 5555, guided Wireless Debugging dialog otherwise;
+   verified 4/4 on the S25), but it cannot enable Developer Options or accept
+   the pairing dialog for the user.
+3. **60 FPS is a cap, not an end-to-end guarantee.** The phone can produce near-60 FPS
    under some scenes while Chrome drops far below that rate under complex motion. The
    2026-11-09 hotspot measurement is one short run on one pair, not a soak.
 4. **Hardened runtime deployed and certified.** The hardened runtime in
    [runtime/termux/](runtime/termux/) (cookie auth, Origin/Host checks, TLS fail-closed,
    admin-only control) was independently reviewed before publication. On 2026-11-06 it
-   was deployed on the S25 (v0.1.2) and passed the on-40/2026-11-06 certification: 20/20
+   was deployed on the S25 (v0.1.2) and passed the on-device certification: 20/20
    checks including a live browser session (login with certificate fingerprint, video
    decode, injected input). Keep it off untrusted networks regardless;
    see [Security](SECURITY.md) and [certification](docs/certification.md).
 5. **No signed Android app exists.** `main` includes the relay source, browser
-   clients, launcher/watchdog scripts, an idempotent Termux install script that downloads
+   clients, launcher/watchdog scripts, an idempotent Termux installer that downloads
    the official scrcpy server with a pinned checksum, and automated security tests
    (26/26 passing) plus a completed independent security review and the completed
    on-device certification. This is a source-available prototype, not a Play-Store
@@ -180,22 +180,22 @@ hotspot or Wi-Fi; Bluetooth is not used for video.
    exclusively via the WebCodecs API (`VideoDecoder`) — there is no MSE or
    `<video>` fallback. **Chrome (or another Chromium-based browser with WebCodecs
    enabled) is required; Firefox does not support WebCodecs H.264 decoding and shows a
-  black screen with `0 fps, 0.0 Mbps` and the `sin WebCodecs` overlay note.** On a
-  Galaxy Tab S6 Lite, updated Chrome works; keep the tablet's Chrome up to date.
-  The HEVC path has an additional constraint: on Android, Chrome exposes HEVC only
+   black screen with `0 fps, 0.0 Mbps` and the `sin WebCodecs` overlay note.** On a
+   Galaxy Tab S6 Lite, updated Chrome works; keep the tablet's Chrome up to date.
+   The HEVC path has an additional constraint: on Android, Chrome exposes HEVC only
    through platform (hardware) decoders — there is no software fallback — so the HEVC
    default additionally requires a hardware HEVC decoder (confirmed present on the
-  tested tablet by the 2026-11-08 probe; see [hevc-study.md](docs/hevc-study.md)).
+   tested tablet by the 2026-11-08 probe; see [hevc-study.md](docs/hevc-study.md)).
 7. **The virtual display starts empty (black), and vendor launchers may refuse to run
    on it.** An Android virtual display is created blank. The runtime launcher script
    starts the HOME intent on the newly created display; on Samsung One UI the stock
    launcher (`com.sec.android.app.launcher`) rejects launching on a virtual display
    from the shell (`SecurityException ... launchDisplayId`), so the script falls back
    to launching the exported Settings activity as initial content. Apps that set
-  `FLAG_SECURE` (banking, DRM apps) render as black by designed and cannot be captured.
-  In addition, the One UI Recents/task-switcher does not work on virtual displays: the
-  recents view opens on the default display and appears empty, so task switching must
-  use a keyboard task-switcher shortcut or relaunching apps.
+   `FLAG_SECURE` (banking, DRM apps) render as black by design and cannot be captured.
+   In addition, the One UI Recents/task-switcher does not work on virtual displays: the
+   recents view opens on the default display and appears empty, so task switching must
+   use a keyboard task-switcher shortcut or relaunching apps.
 8. **Tablet input is touch-and-injection; the phone-paired physical mouse is routed
    natively when available.** Touch on the tablet streams touch events through the
    browser session into the scrcpy control socket; pointer events (mouse paired to
@@ -205,7 +205,7 @@ hotspot or Wi-Fi; Bluetooth is not used for video.
    (`route-input.sh` + `jvm/InputAssoc`/`InputFocus` via `app_process`, calling the
    Android 14+ hidden `IInputManager.addUniqueIdAssociationByDescriptor` /
    `setDisplayIdForPointerIcon`): Android itself re-targets the mouse to the virtual
-   display, so there is no ghost input on the script's physical screen and the real system cursor
+   display, so there is no ghost input on the phone screen and the real system cursor
    renders inside the DeX. This was verified working on the S25 on 2026-11-07; it uses
    hidden APIs and must be re-applied on every session start (the runtime does this
    automatically). If the association cannot be applied (jars missing or the API
@@ -216,9 +216,9 @@ hotspot or Wi-Fi; Bluetooth is not used for video.
    [bluetooth-mouse-routing.md](docs/bluetooth-mouse-routing.md).
 9. **Hotspot + Wi-Fi + mobile data changes the addressing model.** With the phone's
    hotspot active alongside other networks, the phone has multiple interfaces with
-   IPs (`swlan0` for the hotspot, `wlan0` for Wi-Fi, original for data), and the
+   IPs (`swlan0` for the hotspot, `wlan0` for Wi-Fi, `rmnet` for data), and the
    Termux `ip` binary cannot read interface addresses on modern Android (netlink is
-   restricted for apps) — so the installer and `update-network.sh` install interfaces
+   restricted for apps) — so the installer and `update-network.sh` detect interfaces
    through the adb loopback connection (`adb shell ip`), preferring the hotspot
    interface (`swlan0`) first. Never hardcode the phone's hotspot address; when in
    doubt, pass it explicitly with `WTM_ALLOWED_HOSTS` (install) or as an argument
@@ -234,8 +234,8 @@ labels the observed baseline separately from provisional recommendations and unk
 
 The current source project is licensed for non-commercial use: software under
 [PolyForm Noncommercial 1.0.0](LICENSE) and documentation under
-[CC BY-NC 4.0](docs/requiremets.txt). These are source-available licenses, not
-OSI-approved \"open source\"; commercial use requires separate permission.
+[CC BY-NC 4.0](LICENSE-docs.txt). These are source-available licenses, not
+OSI-approved "open source"; commercial use requires separate permission.
 See [licensing](LICENSING.md) and third-party notices in
 [dependencies](docs/dependencies.md).
 
@@ -254,12 +254,11 @@ See [licensing](LICENSING.md) and third-party notices in
   bitstream suite (18/18 verified on-device in Termux (S25) and integrated in CI); independent
   security review completed
 - On-device certification: **completed 2026-11-06, 20/20 PASS** (see [certification](docs/certification.md))
-- **Post-reboot start: verified 4/4 on the S25 (2026-11-10) via the DeX wizard**
-  (issue #15)
+- Post-reboot start: **verified 4/4 on the S25 (2026-11-10) via the DeX wizard** (issue #15)
 - CI: `.github/workflows/ci.yml`; releases: `.github/workflows/release.yml`
 - Public issue templates: available in `.github/ISSUE_TEMPLATE/`
 - Release artifacts: source packages under
   [Releases](https://github.com/JostinVaron/WTM/releases), built from `v*` tags
 
-See [Project governance](docs/project-ggress.md) for what must be completed before
+See [Project governance](docs/project-governance.md) for what must be completed before
 creating a public release.
