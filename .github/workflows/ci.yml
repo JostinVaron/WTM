@@ -34,7 +34,7 @@ jobs:
         working-directory: runtime/termux
         run: |
           for f in dex.sh install.sh scrcpy-phone.sh watchdog.sh start_phone.sh \
-                   update-network.sh shortcuts/start-dex.sh shortcuts/stop-dex.sh \
+                   update-network.sh shortcuts/DeX shortcuts/Exit-Dex bin/start-dex.sh bin/stop-dex.sh \
                    boot/01-dex.sh tests/device-smoke.sh; do
             bash -n "$f"
           done
