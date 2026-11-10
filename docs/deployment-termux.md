@@ -43,13 +43,26 @@ hardened runtime via Path A.**
 
 ## Start
 
+Since v0.4.0 the single guided start path is the DeX wizard
+(Termux:Widget "DeX" shortcut, or `bash $HOME/.shortcuts/DeX`).
 The one-tap shortcut is:
 
 ```text
-$HOME/.shortcuts/start-dex.sh
+$HOME/.shortcuts/DeX
 ```
 
-It requests a wake lock when available and calls:
+The wizard recovers the full chain and is reboot-proof: it verifies
+ADB on port 5555 (guided Wireless Debugging dialog when the port is
+down after a reboot), detects the hotspot IP (`swlan0` via
+`adb shell ip`), syncs `server.env`, checks that the tablet is on the
+hotspot, starts the service and waits for `scrcpy_alive`, then shows
+the exact URL, TLS fingerprint and any configured token in a
+persistent dialog (also copied to the clipboard). Verified 4/4
+across real S25 reboots (2026-11-10, issue #15). The old
+`start-dex.sh` shortcut remains as a compatibility wrapper.
+
+Under the hood the wizard still requests a wake lock when available
+and calls:
 
 ```sh
 cd "$HOME/dex"
@@ -75,13 +88,20 @@ fingerprint as described below and do not disable certificate validation globall
 The Termux:Widget stop shortcut is:
 
 ```text
-$HOME/.shortcuts/stop-dex.sh
+$HOME/.shortcuts/Exit-Dex
 ```
 
 It marks the watchdog as intentionally stopped, removes the ADB forward, terminates the
 scrcpy display process where reachable, stops the relay and releases the wake lock.
 Verify that `/api/status` no longer responds and no scrcpy virtual display remains.
 
+## Post-reboot start (v0.4.0 wizard)
+
+With the v0.4.0 wizard the post-reboot flow is no longer
+best-effort: after a reboot the user taps `DeX` and the wizard
+recovers ADB (or guides the Wireless Debugging dialog), re-detects
+the hotspot IP and starts the service. The legacy watchdog path
+below still exists as a fallback.
 ## Boot and recovery behavior
 
 `$HOME/.termux/boot/01-dex.sh` attempts to obtain a wake lock and start

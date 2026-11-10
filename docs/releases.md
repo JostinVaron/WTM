@@ -34,6 +34,25 @@ in `runtime/termux/VERSION` and bumped before tagging. The current version is
 experimental and does not imply production stability or hardware certification
 beyond the completed on-device run on the tested pair.
 
+## What changed in v0.4.0
+
+- **DeX wizard as the single guided start path** (issue #15): the new
+  `shortcuts/DeX` shortcut recovers ADB after a reboot (fixed port
+  5555, guided Wireless Debugging fallback), detects the hotspot IP,
+  syncs `server.env`, checks the tablet, starts the service to
+  `scrcpy_alive` and shows the exact URL, TLS fingerprint and any
+  configured token in a persistent dialog (also copied to the
+  clipboard). Verified 4/4 on real S25 reboots (2026-11-10).
+  `shortcuts/Exit-Dex` stops the session; the old `start-dex.sh` and
+  `stop-dex.sh` shortcuts remain as compatibility wrappers.
+- **`install.sh` section 6** installs the four shortcuts plus the
+  validated internal scripts (`bin/start-dex.sh`, `bin/stop-dex.sh`)
+  under `~/.config/wtm/bin/`.
+- **CI** now syntax-checks the wizard, `Exit-Dex` and `bin/`; the
+  release tarball packages `runtime/termux/bin/`.
+- Docs synchronized: README quick start, deployment guide,
+  dependencies, requirements, certification and SECURITY.md.
+
 ## What changed in v0.3.1
 
 - **Hotspot as the recommended transport** (PR #11): `install.sh` prefers
@@ -69,19 +88,19 @@ syntax checks and a fail-closed secret sweep on every push and pull request.
 If Actions are unavailable, build and publish from a machine with `gh`:
 
 ```sh
-VERSION=0.3.1
+VERSION=0.4.0
 tar -czf "wtm-runtime-${VERSION}.tar.gz" \
     --transform "s,^,wtm-runtime-${VERSION}/," \
     LICENSE LICENSE-docs.txt LICENSING.md README.md SECURITY.md \
     AGENTS.md CODE_OF_CONDUCT.md CONTRIBUTING.md \
-    runtime/termux/server.py runtime/termux/mouse-route.py \
+    runtime/termux/server.py runtime/termux/hevc.py runtime/termux/mouse-route.py \
     runtime/termux/find-adb-port.py runtime/termux/web \
     runtime/termux/dex.sh runtime/termux/install.sh \
     runtime/termux/scrcpy-phone.sh runtime/termux/route-input.sh \
     runtime/termux/start_phone.sh runtime/termux/watchdog.sh \
     runtime/termux/update-network.sh runtime/termux/jvm \
     runtime/termux/native runtime/termux/tools \
-    runtime/termux/shortcuts runtime/termux/boot runtime/termux/tests \
+    runtime/termux/shortcuts runtime/termux/bin runtime/termux/boot runtime/termux/tests \
     runtime/termux/VERSION runtime/termux/requirements.txt \
     docs/architecture.md docs/bluetooth-mouse-routing.md \
     docs/certification.md docs/dependencies.md \
@@ -101,10 +120,13 @@ On the source phone, in Termux:
 
 ```sh
 curl -L -o wtm.tar.gz \
-  https://github.com/JostinVaron/WTM/releases/download/v0.3.1/wtm-runtime-0.3.1.tar.gz
+  https://github.com/JostinVaron/WTM/releases/download/v0.4.0/wtm-runtime-0.4.0.tar.gz
 tar -xzf wtm.tar.gz
-cd wtm-runtime-0.3.1/runtime/termux
+cd wtm-runtime-0.4.0/runtime/termux
 bash install.sh
+# Start: bash ~/.shortcuts/DeX - the wizard recovers ADB after a
+#        reboot and shows the URL + TLS fingerprint.
+# Stop:  bash ~/.shortcuts/Exit-Dex
 ```
 
 Always verify the published SHA-256 before extracting, and remember that

@@ -99,7 +99,7 @@ certificate is self-signed (trust rests on the fingerprint comparison), and
 the login throttle is per peer IP with a 5-minute window (expired entries are
 pruned on each sign-in attempt). The on-device certification has been
 exercised on the S25 (2026-11-06, 20/20 PASS); long-duration soak testing
-and reboot recovery remain unmeasured. Track remaining gaps in issues before
+remains unmeasured; reboot recovery has since been measured on the S25 (4/4 post-reboot starts recovered by the DeX wizard, 2026-11-10, issue #15). Track remaining gaps in issues before
 any production claim.
 
 ## Release-candidate hardening status
