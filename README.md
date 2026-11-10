@@ -23,18 +23,24 @@ supported; it was the measured bottleneck in the reference network.
 ```sh
 # 1. On the source phone, in Termux:
 curl -L -o wtm.tar.gz \
-  https://github.com/JostinVaron/WTM/releases/download/v0.3.1/wtm-runtime-0.3.1.tar.gz
+  https://github.com/JostinVaron/WTM/releases/download/v0.4.0/wtm-runtime-0.4.0.tar.gz
 tar -xzf wtm.tar.gz
-cd wtm-runtime-0.3.1/runtime/termux
+cd wtm-runtime-0.4.0/runtime/termux
 bash install.sh        # installs packages, verifies the scrcpy server, generates tokens
 
-# 2. Start the bridge (Termux:Widget "start-dex" shortcut, or):
-bash ~/.shortcuts/start-dex.sh
+# 2. Start DeX with the one-tap wizard (Termux:Widget "DeX" shortcut, or):
+bash ~/.shortcuts/DeX
+#    The wizard recovers ADB after a reboot (guided Wireless Debugging
+#    dialog if port 5555 is down), detects the hotspot IP, syncs server.env,
+#    verifies the tablet, starts the service, and shows the exact URL +
+#    TLS fingerprint in a persistent dialog (also copied to the clipboard).
 
-# 3. On the tablet, open Chrome at the URL printed by install.sh and
-#    compare the certificate fingerprint with the one printed on install
+# 3. On the tablet, open Chrome at the URL shown by the wizard and
+#    compare the certificate fingerprint with the one shown in the wizard
 #    BEFORE entering any token.
 ```
+
+**Stop:** Termux:Widget "Exit-Dex" shortcut (or `bash ~/.shortcuts/Exit-Dex`).
 
 Full walkthrough: [deployment guide](docs/deployment-termux.md) · what a release
 contains: [releases](docs/releases.md) · verified evidence:
@@ -71,6 +77,12 @@ contains: [releases](docs/releases.md) · verified evidence:
   1.4-1.6 s of decoder delay in one test. App-switch windows measured about 27-46 FPS.
 - For this tablet, WebCodecs software decoding performed substantially better than the
   forced hardware path in the observed A/B test. The browser defaults to software.
+- **Post-reboot start is verified on this pair (2026-11-10): the DeX wizard
+  recovered the session after 4 of 4 real reboots of the S25** (issue #15),
+  including full adbd fallback to USB mode and hotspot IP changes; the only
+  manual step is the guided Wireless Debugging dialog when `adb tcpip 5555`
+  is unreachable. The wizard prints the exact URL and TLS fingerprint after
+  every start, because the hotspot IP changes on every reboot.
 - Touch/input forwarding and the virtual-display pipeline have been used on this pair,
   but there is no formal compatibility or long-duration reliability certification.
 - Bluetooth mouse routing to the virtual display has been restored and verified working
@@ -144,7 +156,10 @@ hotspot or Wi-Fi; Bluetooth is not used for video.
 2. **ADB must be available and authorized.** Android can disable Wireless
    Debugging or change its TCP port after a reboot. Saved pairing keys do not guarantee
    that the debugging service remains enabled. A USB connection is an alternative ADB
-   transport where supported.
+   transport where supported. Since v0.4.0 the DeX wizard automates post-reboot
+   ADB recovery (fixed port 5555, guided Wireless Debugging dialog otherwise;
+   verified 4/4 on the S25), but it cannot enable Developer Options or accept
+   the pairing dialog for the user.
 3. **60 FPS is a cap, not an end-to-end guarantee.** The phone can produce near-60 FPS
    under some scenes while Chrome drops far below that rate under complex motion. The
    2026-11-09 hotspot measurement is one short run on one pair, not a soak.
@@ -227,10 +242,10 @@ See [licensing](LICENSING.md) and third-party notices in
 ## Repository status
 
 - Public repository: [JostinVaron/WTM](https://github.com/JostinVaron/WTM)
-- Version: **v0.3.1** — published runtime, source-only (see
+- Version: **v0.4.0** — published runtime, source-only (see
   [Releases](https://github.com/JostinVaron/WTM/releases))
 - License: software [PolyForm Noncommercial 1.0.0](LICENSE), documentation
-  [CC BY-NC 4.0](LICENSE-docs.txt) — see [Licensing](LICENSING.md)
+  CC BY-NC 4.0](LICENSE-docs.txt) — see [Licensing](LICENSING.md)
 - Supported installations: **none formally**
 - Latest tested configuration: **S25 + Tab S6 Lite, 2000 x 1200 / configured 60 FPS,
   phone-hotspot transport**
@@ -239,6 +254,7 @@ See [licensing](LICENSING.md) and third-party notices in
   bitstream suite (18/18 verified on-device in Termux (S25) and integrated in CI); independent
   security review completed
 - On-device certification: **completed 2026-11-06, 20/20 PASS** (see [certification](docs/certification.md))
+- Post-reboot start: **verified 4/4 on the S25 (2026-11-10) via the DeX wizard** (issue #15)
 - CI: `.github/workflows/ci.yml`; releases: `.github/workflows/release.yml`
 - Public issue templates: available in `.github/ISSUE_TEMPLATE/`
 - Release artifacts: source packages under

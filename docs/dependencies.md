@@ -24,6 +24,7 @@ is packaged or installed by a single installer.
 | Termux:API command package | 0.60.0 observed | Provides optional `termux-wake-lock`, `termux-wake-unlock` and toast commands |
 | Termux:API Android companion app | Not installed on the observed S25 | Required by Android for API plug-in actions such as toast; without it those actions are unavailable |
 | Bluetooth mouse association helper | Experimental Java/app_process helper in active scripts | Optional routing of a paired physical mouse; device-descriptor- and Android-version-dependent, not a video dependency |
+| DeX wizard (`shortcuts/DeX`) | v0.4.0; verified on the S25 with 4/4 post-reboot recoveries (2026-11-10) | Single guided start path: ADB 5555 recovery with guided Wireless Debugging fallback, hotspot IP detection and `server.env` sync, tablet check, service start to `scrcpy_alive`; UI via `termux-dialog`/`termux-toast`/`termux-notification`/`termux-clipboard-set` (Termux:API command package) |
 
 The historical implementation of this helper is documented in
 [docs/bluetooth-mouse-routing.md](bluetooth-mouse-routing.md) (mechanism,

@@ -51,6 +51,7 @@ jobs:
               runtime/termux/VERSION \
               runtime/termux/requirements.txt \
               runtime/termux/shortcuts \
+              runtime/termux/bin \
               runtime/termux/boot \
               runtime/termux/tests \
               docs/architecture.md \

@@ -56,6 +56,8 @@ presented as photon-to-photon latency. See [performance evidence](performance.md
 - Samsung Android 16/API 36 is the observed baseline; lower versions are unverified.
 - Termux installed natively (not only inside PRoot) with the project files and runtime
   packages documented in [dependencies](dependencies.md).
+- Termux:API command package (for the DeX wizard's guided dialogs: `termux-dialog`,
+  `termux-toast`, `termux-notification`, `termux-clipboard-set`).
 - Wireless Debugging enabled and paired/authorized for the ADB client used by the
   launcher.
 - Android background/battery policy must allow Termux to run; Termux:Boot and

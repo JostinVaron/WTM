@@ -1,0 +1,9 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Exit-Dex: detiene la sesion actual del DeX.
+# Detiene bridge + scrcpy + enrutado de mouse con verificacion y marca de
+# parada para el watchdog (rd-dex-stopped). Wrapper del bin/stop-dex.sh del
+# runtime, mantenido en .shortcuts para Termux:Widget.
+export PATH=/data/data/com.termux/files/usr/bin:/system/bin:/system/xbin
+export HOME=/data/data/com.termux/files/home
+export PREFIX=/data/data/com.termux/files/usr
+exec bash "$HOME/.config/wtm/bin/stop-dex.sh" "$@"

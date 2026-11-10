@@ -74,13 +74,26 @@ Devices used for the run: the S25 (wireless debugging enabled) and the
 Tab S6 Lite, both on the local network. Device IPs and ADB ports are
 deliberately not published.
 
+## Post-reboot wizard verification (2026-11-10)
+
+The DeX wizard (`shortcuts/DeX`, v0.4.0) was exercised on the S25
+across 4 real reboots: in every case it recovered the full chain
+(ADB 5555, or the guided Wireless Debugging dialog when the port
+was down, hotspot IP detection, `server.env` sync, service start to
+`scrcpy_alive`) and delivered the exact URL, TLS fingerprint and
+any configured token in a persistent dialog (also copied to the
+clipboard). Result: **4/4 PASS** (issue #15). This covers only the
+start-after-reboot path: it is not a long-duration soak and does not
+re-run the 20-check certification.
+
 ## What this certification does NOT cover
 
 - Real Chrome/WebCodecs decode on the tablet (the 2K60 performance evidence
   in [performance](performance.md) remains the reference; no new measurement
   was taken during this work).
-- Long-duration stability, thermal behavior, reboot recovery or Wi-Fi
-  handover.
+- Long-duration stability, thermal behavior, reboot recovery or Wi-Fi handover. (Reboot recovery has since been
+  measured separately: 4/4 via the DeX wizard, 2026-11-10; see the
+  section above.)
 - Any guarantee of security: passing these tests means the implemented
   controls behave as specified, not that the system is invulnerable. See
   [threat-model](threat-model.md) for the complete model, including residual
