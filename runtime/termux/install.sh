@@ -353,7 +353,7 @@ fi
 
 # --- 6. atajos de Termux:Widget y Termux:Boot ------------------------------
 if [ -d "$HOME_DIR/.shortcuts" ]; then
-    for shortcut in start-dex.sh stop-dex.sh; do
+    for shortcut in DeX Exit-Dex start-dex.sh stop-dex.sh; do
         if ! cmp -s "$SOURCE_DIR/shortcuts/$shortcut" "$HOME_DIR/.shortcuts/$shortcut" 2>/dev/null; then
             cp "$SOURCE_DIR/shortcuts/$shortcut" "$HOME_DIR/.shortcuts/$shortcut"
             chmod +x "$HOME_DIR/.shortcuts/$shortcut"
@@ -376,7 +376,15 @@ fi
 
 # --- 7. resumen ------------------------------------------------------------
 log "Instalación completa en $INSTALL_DIR."
-log "Inicia el servicio: bash $HOME_DIR/.shortcuts/start-dex.sh"
+mkdir -p "$HOME_DIR/.config/wtm/bin"
+for binscript in start-dex.sh stop-dex.sh; do
+    if ! cmp -s "$SOURCE_DIR/bin/$binscript" "$HOME_DIR/.config/wtm/bin/$binscript" 2>/dev/null; then
+        cp "$SOURCE_DIR/bin/$binscript" "$HOME_DIR/.config/wtm/bin/$binscript"
+        chmod +x "$HOME_DIR/.config/wtm/bin/$binscript"
+        log "Script interno instalado: .config/wtm/bin/$binscript"
+    fi
+done
+log "Inicia el servicio: bash $HOME_DIR/.shortcuts/DeX"
 log "Abre en la tablet: https://$ALLOWED_HOSTS:$PORT/"
 log "En el primer acceso, VERIFICA que la huella del certificado mostrada"
 log "en la página coincide con $FINGERPRINT ($FINGERPRINT_FILE)."
