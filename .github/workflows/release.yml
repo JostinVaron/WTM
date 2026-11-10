@@ -83,7 +83,7 @@ jobs:
             gh release create "$GITHUB_REF_NAME" \
                 --repo "$GITHUB_REPOSITORY" \
                 --title "WTM runtime $GITHUB_REF_NAME" \
-                --notes "Automated source package of the WTM Termux runtime. See docs/certification.md for test evidence and pending on-device certification." \
+                --notes "Automated source package of the WTM Termux runtime. See docs/certification.md for test evidence." \
                 dist/*
           fi
 
