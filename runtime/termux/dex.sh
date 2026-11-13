@@ -23,10 +23,7 @@ ADB="$PREFIX/bin/adb"
 NEW_DISPLAY="${NEW_DISPLAY:-2000x1200/240}"
 PORT="${PORT:-8443}"
 LOG="$PREFIX/tmp/rd-bridge.log"
-# Enrutado del mouse FÍSICO Bluetooth del teléfono: 1 = activo por defecto.
-# Vía principal: ASOCIACIÓN NATIVA (route-input.sh, APIs ocultas de
-# InputManager): el mouse controla SOLO el display virtual (sin fantasma en
-# la pantalla del teléfono). Respaldo: mouse-route.py (getevent -> bridge).
+# Enrutado del mouse FISICO Bluetooth: 1 = activo por defecto.
 MOUSE_ROUTE="${MOUSE_ROUTE:-1}"
 
 log(){ printf '[dex] %s %s\n' "$(date '+%F %T')" "$*"; }
@@ -75,31 +72,62 @@ scrcpy_pid(){
 mkdir -p "$TMPDIR"
 rm -f "$TMPDIR/rd-dex-stopped"
 PHONE=$(find_phone || true)
+
+# --- P3 (hueco H3): escaneo con reintentos. El daemon de depuracion inalambrica
+# rota su puerto durante ~1 min tras el boot; una sola pasada pierde la carrera.
 if [ -z "$PHONE" ]; then
-    # Android moderno: el adbd de depuración inalámbrica NO escucha en
-    # 127.0.0.1 sino en la IP de la red Wi-Fi. find-adb-port.py escanea varios
-    # hosts candidatos y ahora imprime "host:port" por cada adbd hallado.
-    for entry in $(python3 find-adb-port.py 2>/dev/null || true); do
-        "$ADB" connect "$entry" >/dev/null 2>&1 || continue
-        PHONE=$(find_phone || true)
+    for scan_round in $(seq 1 6); do
+        for entry in $(python3 find-adb-port.py 2>/dev/null || true); do
+            "$ADB" connect "$entry" >/dev/null 2>&1 || true
+            PHONE=$(find_phone || true)
+            [ -n "$PHONE" ] && break
+        done
         [ -n "$PHONE" ] && break
+        log "Escaneo ADB ronda $scan_round/6 sin resultado; esperando 5s."
+        sleep 5
     done
 fi
 if [ -z "$PHONE" ]; then
-    log "No se encontró el S25 por ADB. No se modificó la depuración inalámbrica."
+    log "No se encontro el S25 tras 6 escaneos. Usa el widget 'recuperar-dex' con el IP:puerto de la pantalla."
     exit 1
 fi
-log "Teléfono confirmado por modelo: $PHONE"
+log "Telefono confirmado por modelo: $PHONE"
+
+# --- P2 (hueco H2): sembrar adbd en TCP 5555 y migrar a loopback estable.
+# El puerto rotativo muere con la radio; el 5555 es estable mientras adbd viva.
+if [ "$PHONE" != "127.0.0.1:5555" ]; then
+    "$ADB" -s "$PHONE" tcpip 5555 >/dev/null 2>&1 \
+        || log "Aviso: 'tcpip 5555' fallo; se continua con $PHONE."
+    sleep 3
+    "$ADB" connect 127.0.0.1:5555 >/dev/null 2>&1 || true
+    NEW_PHONE=$(find_phone 2>/dev/null | grep -Fx '127.0.0.1:5555' || true)
+    if [ -n "$NEW_PHONE" ]; then
+        log "Sesion migrada a loopback estable (127.0.0.1:5555)."
+        PHONE="127.0.0.1:5555"
+    fi
+fi
 
 if ! SCRCPY_PID=$(scrcpy_pid) || [ -z "$SCRCPY_PID" ]; then
-    log "scrcpy no estaba activo; iniciándolo."
+    log "scrcpy no estaba activo; iniciandolo."
     NEW_DISPLAY="$NEW_DISPLAY" ./scrcpy-phone.sh
 else
-    log "scrcpy ya está activo (PID $SCRCPY_PID); se conserva el display existente."
+    log "scrcpy ya esta activo (PID $SCRCPY_PID); se conserva el display existente."
+fi
+
+# --- P1 (hueco H1): pre-flight de red. Si la IP del hotspot cambio tras un
+# reboot, server.env apunta a una IP muerta y el bridge muere en el bind.
+# Re-apuntar config + regenerar cert ANTES de levantar el bridge.
+# swlan0 (hotspot) primero, wlan0 (WiFi router) de respaldo.
+CUR_IP=$("$ADB" -s "$PHONE" shell "ip -4 addr show swlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print \$2}'" 2>/dev/null | tr -d '\r' || true)
+[ -z "$CUR_IP" ] && CUR_IP=$("$ADB" -s "$PHONE" shell "ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print \$2}'" 2>/dev/null | tr -d '\r' || true)
+if [ -n "$CUR_IP" ] && [ "$CUR_IP" != "$WTM_BIND_HOST" ]; then
+    log "IP cambio (${WTM_BIND_HOST} -> ${CUR_IP}); regenerando config y certificado."
+    bash ./update-network.sh "$CUR_IP" || log "Aviso: update-network.sh fallo; se continua con la config actual."
+    set -a; . "$CONFIG"; set +a
 fi
 
 if ! bridge_up; then
-    log "Bridge no responde; iniciándolo."
+    log "Bridge no responde; iniciandolo."
     BACKEND=scrcpy PORT="$PORT" FPS=60 \
         WTM_AUTH_FILE="$WTM_AUTH_FILE" CERT="$CERT" KEY="$KEY" \
         WTM_BIND_HOST="$WTM_BIND_HOST" WTM_ALLOWED_HOSTS="$WTM_ALLOWED_HOSTS" \
@@ -126,24 +154,15 @@ if [ "$ready_samples" -lt 3 ]; then
     exit 1
 fi
 
-IP=$("$ADB" -s "$PHONE" shell "ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print \$2}'" 2>/dev/null | tr -d '\r')
-[ -z "$IP" ] && IP=$("$ADB" -s "$PHONE" shell "ip -4 addr show swlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print \$2}'" 2>/dev/null | tr -d '\r')
+# --- P4 (bug b): swlan0 (hotspot) ANTES que wlan0; antes imprimia la IP del
+# router como URL para la tablet.
+IP=$("$ADB" -s "$PHONE" shell "ip -4 addr show swlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print \$2}'" 2>/dev/null | tr -d '\r')
+[ -z "$IP" ] && IP=$("$ADB" -s "$PHONE" shell "ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print \$2}'" 2>/dev/null | tr -d '\r')
 log "LISTO: bridge y scrcpy activos. Tablet: https://${IP:-<IP>}:$PORT/#auto"
 
-# --- Enrutado del mouse FÍSICO Bluetooth --------------------------------------
-# VÍA PRINCIPAL — asociación NATIVA (subsystem histórico restaurado,
-# docs/bluetooth-mouse-routing.md): route-input.sh usa las APIs ocultas de
-# InputManager vía app_process para que Android mismo reasigne los mouses
-# Bluetooth al display virtual. Efectos: SIN movimiento fantasma en la
-# pantalla del teléfono, cursor Samsung REAL dentro del DeX (viaja por el
-# stream de video), cero pasos manuales. La asociación es por-display y debe
-# re-aplicarse en cada arranque (esto ya ocurre aquí) — igual que hacía el
-# start-all.sh histórico, se reintenta hasta 10 veces tolerando fallo
-# (cuando scrcpy tarda en registrar el display en dumpsys).
-# Si no puede aplicarse (jars ausentes, API oculta ausente, sin mouse),
-# cae al RESPALDO: mouse-route.py (getevent -> bridge -> scrcpy).
+# --- Enrutado del mouse FISICO Bluetooth --------------------------------------
 if [ "$MOUSE_ROUTE" != "1" ]; then
-    log "MOUSE_ROUTE distinto de 1; el mouse físico seguirá solo en la pantalla del teléfono."
+    log "MOUSE_ROUTE distinto de 1; el mouse fisico seguira solo en la pantalla del telefono."
     exit 0
 fi
 
@@ -152,44 +171,44 @@ if [ -x "$PWD/route-input.sh" ]; then
     for attempt in $(seq 1 10); do
         if out=$(MOUSE_DESCRIPTOR="${MOUSE_DESCRIPTOR:-}" "$PWD/route-input.sh" 2>&1); then
             printf '%s\n' "$out" | sed 's/^/[dex] /'
-            log "asociación nativa del mouse aplicada (intento $attempt)."
+            log "asociacion nativa del mouse aplicada (intento $attempt)."
             associated=1
             break
         fi
         rc=$?
         case "$rc" in
-            4)  # sin mouse detectado: esperar y reintentar (puede estar apagado)
-                sleep 1
-                ;;
-            5)  # display virtual aún no registrado por dumpsys: reintentar
-                sleep 1
-                ;;
-            3)  # API oculta ausente: no reintentar, ir al respaldo
-                printf '%s\n' "$out" | sed 's/^/[dex] /'
-                log "API oculta de asociación ausente; se usará el enrutador de respaldo."
-                break
-                ;;
-            6)  # jars no construidos: no reintentar, ir al respaldo
-                printf '%s\n' "$out" | sed 's/^/[dex] /'
-                log "jars de asociación ausentes; se usará el enrutador de respaldo."
-                break
-                ;;
-            *)  # otro error: reintentar unas veces y luego respaldo
-                printf '%s\n' "$out" | sed 's/^/[dex] /'
-                [ "$attempt" -lt 10 ] && sleep 1
-                ;;
+            4)  sleep 1 ;;
+            5)  sleep 1 ;;
+            3)  printf '%s\n' "$out" | sed 's/^/[dex] /'
+                log "API oculta de asociacion ausente; se usara el enrutador de respaldo."
+                break ;;
+            6)  printf '%s\n' "$out" | sed 's/^/[dex] /'
+                log "jars de asociacion ausentes; se usara el enrutador de respaldo."
+                break ;;
+            *)  printf '%s\n' "$out" | sed 's/^/[dex] /'
+                [ "$attempt" -lt 10 ] && sleep 1 ;;
         esac
     done
     if [ "$associated" = "1" ]; then
+        # Asociacion nativa activa: el respaldo por grab/captura no es necesario.
+        if [ -r "$TMPDIR/rd-mouse-route.pid" ]; then
+            mpid=$(tr -cd '0-9' <"$TMPDIR/rd-mouse-route.pid")
+            if [ -n "$mpid" ] && kill -0 "$mpid" 2>/dev/null; then
+                kill -TERM "$mpid" 2>/dev/null || true
+                log "respaldo mouse-route detenido (PID $mpid): asociacion nativa aplicada."
+            fi
+            rm -f "$TMPDIR/rd-mouse-route.pid"
+        fi
         exit 0
     fi
 else
-    log "route-input.sh no presente; se usará el enrutador de respaldo."
+    log "route-input.sh no presente; se usara el enrutador de respaldo."
 fi
 
-# RESPALDO — mouse-route.py: lee el mouse con getevent y lo reenvía al
-# bridge (PATCH /api/mouse), que lo inyecta al display virtual. Modo GRAB
-# (EVIOCGRAB) si el grabber compiló: cero fantasma. LEGACY si no.
+# RESPALDO: mouse-route.py (getevent -> bridge). En algunos dispositivos el
+# acceso a /dev/input puede no estar permitido; si route-input.sh existe,
+# se mantiene tambien un reintento nativo en segundo plano por si el mouse
+# se conecta mas tarde o la asociacion tarda en ser posible.
 if [ -f "$PWD/mouse-route.py" ]; then
     if [ -r "$TMPDIR/rd-mouse-route.pid" ] && kill -0 "$(tr -cd '0-9' <"$TMPDIR/rd-mouse-route.pid" 2>/dev/null)" 2>/dev/null; then
         log "enrutador de mouse ya estaba activo; no se duplica."
@@ -199,5 +218,29 @@ if [ -f "$PWD/mouse-route.py" ]; then
         log "enrutador de respaldo iniciado (log: $TMPDIR/rd-mouse.log)."
     fi
 else
-    log "mouse-route.py no presente; el mouse físico seguirá solo en la pantalla del teléfono."
+    log "mouse-route.py no presente; el mouse fisico seguira solo en la pantalla del telefono."
+fi
+
+if [ -x "$PWD/route-input.sh" ]; then
+    (
+        while [ ! -f "$TMPDIR/rd-dex-stopped" ]; do
+            sleep 5
+            if out=$(MOUSE_DESCRIPTOR="${MOUSE_DESCRIPTOR:-}" "$PWD/route-input.sh" 2>&1); then
+                printf '%s\n' "$out" | sed 's/^/[dex-bg] /'
+                log "asociacion nativa del mouse aplicada en segundo plano."
+                if [ -r "$TMPDIR/rd-mouse-route.pid" ]; then
+                    mpid=$(tr -cd '0-9' <"$TMPDIR/rd-mouse-route.pid")
+                    if [ -n "$mpid" ] && kill -0 "$mpid" 2>/dev/null; then
+                        kill -TERM "$mpid" 2>/dev/null || true
+                    fi
+                    rm -f "$TMPDIR/rd-mouse-route.pid"
+                fi
+                exit 0
+            fi
+            rc=$?
+            case "$rc" in
+                3|6) exit 0 ;;
+            esac
+        done
+    ) >/dev/null 2>&1 &
 fi
