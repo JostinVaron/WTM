@@ -83,16 +83,23 @@ if [ -z "$UNIQUE_ID" ]; then
     printf '%s' "$DUMPD" | grep -iE 'virtual|scrcpy' | head -n 10 | sed 's/^/[route-input]   /'
     exit 5
 fi
-# El uniqueId de scrcpy TERMINA en el displayId numérico:
-#   virtual:com.android.shell,2000,scrcpy,<N>   → displayId = N
-# (verificado en el S25 real; antes se parseaba de dumpsys y salía 0).
-DISPLAY_ID="${UNIQUE_ID##*,}"
-case "$DISPLAY_ID" in
-    ''|*[!0-9]*)
-        # fallback: patrones de dumpsys (por si el formato del uniqueId cambia)
-        DISPLAY_ID=$(printf '%s' "$DUMPD" | grep -E 'type=VIRTUAL|type VIRTUAL' | head -n 1 | grep -oE 'displayId=[0-9]+|displayId [0-9]+' | grep -oE '[0-9]+' | head -n 1)
-        ;;
-esac
+# displayId numérico del display virtual cuyo uniqueId coincide.
+# Nota: el sufijo del uniqueId de scrcpy NO siempre coincide con el
+# displayId real (p.ej. uniqueId ...scrcpy,0 con displayId 6), así que se
+# resuelve desde dumpsys display.
+DISPLAY_ID=$(printf '%s' "$DUMPD" | grep -F "$UNIQUE_ID" | grep -oE "displayId[= ][0-9]+[^']*uniqueId[= ]['\"]${UNIQUE_ID}" | head -n 1 | grep -oE 'displayId[= ][0-9]+' | head -n 1 | grep -oE '[0-9]+')
+if [ -z "$DISPLAY_ID" ]; then
+    DISPLAY_ID=$(printf '%s' "$DUMPD" | grep -F "$UNIQUE_ID" | grep -oE "uniqueId[= ]['\"]${UNIQUE_ID}[^0-9]*displayId[= ][0-9]+" | head -n 1 | grep -oE 'displayId[= ][0-9]+' | head -n 1 | grep -oE '[0-9]+')
+fi
+if [ -z "$DISPLAY_ID" ]; then
+    # fallback histórico: sufijo del uniqueId o primer virtual visto
+    DISPLAY_ID="${UNIQUE_ID##*,}"
+    case "$DISPLAY_ID" in
+        ''|*[!0-9]*)
+            DISPLAY_ID=$(printf '%s' "$DUMPD" | grep -E 'type=VIRTUAL|type VIRTUAL' | head -n 1 | grep -oE 'displayId=[0-9]+|displayId [0-9]+' | grep -oE '[0-9]+' | head -n 1)
+            ;;
+    esac
+fi
 if [ -z "$DISPLAY_ID" ]; then
     log "no se pudo determinar el displayId del display virtual ($UNIQUE_ID)."
     exit 5
