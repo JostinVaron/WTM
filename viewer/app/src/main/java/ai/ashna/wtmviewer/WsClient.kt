@@ -7,6 +7,7 @@ import java.net.URI
 import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
@@ -23,13 +24,19 @@ import kotlin.concurrent.thread
  * 1. LOGIN: POST /api/auth con {"token": <viewer>} y Origin same-site —
  *    exactamente lo que hace el /login del navegador. El relay responde con
  *    la cookie de sesión (rol viewer); la app la guarda y la usa sola.
- *    (Así nadie tiene que extraer cookies de Chrome a mano.)
  * 2. WEBSOCKET: handshake con la cookie; al abrir, 6 mensajes de sync de
  *    reloj ({t:"sync", c:...}) y luego NUNCA responder a los sync del
  *    servidor (evita bucle de eco).
  * 3. VIDEO: config JSON (codec + width/height + hvcC base64) y frames
  *    binarios AVCC (4-byte NAL length prefix).
  * 4. HEARTBEAT: el servidor manda "h" como texto — se ignora (el TCP lo mantiene).
+ *
+ * Confianza TLS: el relay usa un cert self-signed cuyos SANs llevan la IP
+ * del momento en que se generó; la IP del hotspot cambia, así que el
+ * hostname del cert casi nunca coincidirá con el de hoy. Mismo modelo de
+ * confianza que el cliente web (que acepta el cert tras verificar el
+ * fingerprint SHA-256 fuera de banda): aceptamos la cadena Y el hostname.
+ * La identidad real del relay la da el token de sesión, no el SAN del cert.
  */
 class WsClient(
     private val baseUrl: String,
@@ -59,7 +66,7 @@ class WsClient(
         }
     }
 
-    /** Cert self-signed del relay: identidad verificada por fingerprint fuera de banda. */
+    /** Cert self-signed del relay: cadena + hostname aceptados (ver nota de clase). */
     private fun trustAllFactory(): SSLSocketFactory {
         val ctx = SSLContext.getInstance("TLS")
         ctx.init(null, arrayOf<TrustManager>(object : X509TrustManager {
@@ -69,6 +76,8 @@ class WsClient(
         }), SecureRandom())
         return ctx.socketFactory
     }
+
+    private val acceptHostname = HostnameVerifier { _, _ -> true }
 
     /**
      * Login con el token viewer: mismo POST /api/auth que hace el navegador.
@@ -81,6 +90,7 @@ class WsClient(
         val url = URL(baseUrl.trimEnd('/') + "/api/auth")
         val conn = url.openConnection() as HttpsURLConnection
         conn.sslSocketFactory = trustAllFactory()
+        conn.hostnameVerifier = acceptHostname
         conn.requestMethod = "POST"
         conn.doOutput = true
         conn.connectTimeout = 8000
