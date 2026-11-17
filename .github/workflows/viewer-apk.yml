@@ -1,0 +1,24 @@
+name: viewer-apk
+on:
+  push:
+    branches: [feat/native-viewer]
+  workflow_dispatch: {}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Prepare Gradle project
+        run: cd viewer && mv build.gradle.root build.gradle && rm -rf src AndroidManifest.xml
+      - name: Build debug APK
+        run: cd viewer && gradle :app:assembleDebug --no-daemon -Dorg.gradle.jvmargs=-Xmx2g
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wtm-viewer-apk
+          path: viewer/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
