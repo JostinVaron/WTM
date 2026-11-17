@@ -18,6 +18,10 @@ import android.content.SharedPreferences
  * - Pantalla de config simple (URL del relay + cookie de sesión viewer)
  * - SurfaceView a pantalla completa cuando conecta
  * La lógica pesada vive en WsClient y VideoDecoder.
+ *
+ * Nota de política del proyecto (PrivateIpSweepTest): ningún default con IP
+ * RFC 1918 real (192.168.a.b, 10.a.b.c, 172.16-31.a.b) puede vivir en el repo.
+ * El operador escribe la IP real de su teléfono al configurar la app.
  */
 class MainActivity : Activity() {
 
@@ -40,8 +44,8 @@ class MainActivity : Activity() {
         }
         val label = TextView(this).apply { text = "WTM Viewer — conectar al relay" }
         val urlInput = EditText(this).apply {
-            hint = "https://192.168.x.x:8443"
-            setText(prefs.getString("base_url", "https://192.168.43.1:8443"))
+            hint = "https://<phone-ip>:8443"
+            setText(prefs.getString("base_url", ""))
         }
         val cookieInput = EditText(this).apply {
             hint = "Cookie de sesión viewer (de /login)"
@@ -53,6 +57,10 @@ class MainActivity : Activity() {
         connectBtn.setOnClickListener {
             val url = urlInput.text.toString().trim()
             val cookie = cookieInput.text.toString().trim()
+            if (url.isEmpty() || cookie.isEmpty()) {
+                status.text = "Estado: falta URL o cookie"
+                return@setOnClickListener
+            }
             prefs.edit().putString("base_url", url).putString("session_cookie", cookie).apply()
             startStream(url, cookie, status)
         }
