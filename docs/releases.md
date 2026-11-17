@@ -34,6 +34,43 @@ in `runtime/termux/VERSION` and bumped before tagging. The current version is
 experimental and does not imply production stability or hardware certification
 beyond the completed on-device run on the tested pair.
 
+## What changed in v0.5.0
+
+- **Mouse auto-routing to the virtual display on DeX start/exit** (PR #20,
+  validated on-device on the S25, cherry-picked from the validated commit on
+  `feat/hevc-ab-path`):
+  - `route-input.sh` now resolves the virtual display's real numeric
+    `displayId` from `dumpsys display` by matching the full `uniqueId`
+    (the uniqueId suffix does not always match the real displayId — e.g.
+    `...scrcpy,0` was observed with real displayId 6), so the
+    `IInputManager` association and the pointer-icon focus target the
+    correct display.
+  - `dex.sh` stops the `mouse-route.py` fallback when the native association
+    succeeds (no more grabber loop when `/dev/input` capture is unavailable),
+    and keeps a background native retry every 5 s while DeX is active, so a
+    Bluetooth mouse connected later is still auto-routed.
+  - On-device validation (2026-11-13): Exit-DeX/start cycle re-associates the
+    mouse to the current virtual display (e.g. displayId 7 / `...scrcpy,1`)
+    on attempt 1 with no failing `mouse-route` grabber loop; the pointer icon
+    returns to the physical display on stop.
+- **Startup holes closed in `dex.sh`** (same PR):
+  - **H1 — network pre-flight**: if the hotspot IP changed after a reboot,
+    `server.env` is re-pointed and the certificate regenerated via
+    `update-network.sh` **before** the bridge starts (`swlan0` first,
+    `wlan0` as fallback), preventing a bind failure against a dead IP.
+  - **H2 — stable ADB session**: after finding the phone through the
+    wireless-debugging scan, `dex.sh` seeds adbd on TCP 5555 and migrates the
+    session to loopback (`127.0.0.1:5555`) — the rotating wireless-debugging
+    port dies with the radio; 5555 is stable while adbd lives.
+  - **H3 — ADB scan with retries**: the scan now runs up to 6 rounds with a
+    5 s wait between them, because the wireless-debugging daemon rotates its
+    port for ~1 min after boot and a single pass lost the race.
+  - **P4 — hotspot IP first in the tablet URL**: `swlan0` is now preferred
+    over `wlan0` when printing the tablet URL (it previously printed the
+    router IP).
+- No server (`server.py`), client or installer changes; security surface and
+  credentials model are unchanged from v0.4.1.
+
 ## What changed in v0.4.1
 
 - **Documentation-only refresh** (no runtime changes: scripts, shortcuts,
@@ -102,7 +139,7 @@ syntax checks and a fail-closed secret sweep on every push and pull request.
 If Actions are unavailable, build and publish from a machine with `gh`:
 
 ```sh
-VERSION=0.4.1
+VERSION=0.5.0
 tar -czf "wtm-runtime-${VERSION}.tar.gz" \
     --transform "s,^,wtm-runtime-${VERSION}/," \
     LICENSE LICENSE-docs.txt LICENSING.md README.md SECURITY.md \
@@ -134,9 +171,9 @@ On the source phone, in Termux:
 
 ```sh
 curl -L -o wtm.tar.gz \
-  https://github.com/JostinVaron/WTM/releases/download/v0.4.1/wtm-runtime-0.4.1.tar.gz
+  https://github.com/JostinVaron/WTM/releases/download/v0.5.0/wtm-runtime-0.5.0.tar.gz
 tar -xzf wtm.tar.gz
-cd wtm-runtime-0.4.1/runtime/termux
+cd wtm-runtime-0.5.0/runtime/termux
 bash install.sh
 # Start: bash ~/.shortcuts/DeX - the wizard recovers ADB after a
 #        reboot and shows the URL + TLS fingerprint.
