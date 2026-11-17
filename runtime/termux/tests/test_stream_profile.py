@@ -74,9 +74,15 @@ class ReceiverBitrateTests(unittest.TestCase):
         self.assertEqual(bitrate, 14_385_600)
 
     def test_link_without_wifi_reports_zero(self):
-        """link_mbps=0 (sin dato) no debe clampar por el enlace."""
+        """link_mbps=0 (sin dato) no debe clampar por el enlace.
+
+        Techo util: 1280x720 = 921,600 px * 30 fps * 0.1 bpp = 2,764,800 bps.
+        (Constante corregida 2026-11-17: la corrida manual F3 en Termux detecto
+        que el valor esperado original estaba mal calculado; la funcion SIEMPRE
+        calculo el valor correcto.)
+        """
         bitrate = sp.receiver_bitrate(1280, 720, 30, 6_000_000, 0)
-        self.assertEqual(bitrate, 2_304_000)  # solo el techo util
+        self.assertEqual(bitrate, 2_764_800)  # solo el techo util
 
 
 class ValidateCapTests(unittest.TestCase):
