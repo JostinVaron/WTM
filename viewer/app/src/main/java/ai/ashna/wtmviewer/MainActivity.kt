@@ -18,34 +18,91 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.content.Context
 import android.content.SharedPreferences
+import java.net.URL
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
+import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.HostnameVerifier
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 /**
  * Stage 1 (issue #16): viewer nativo.
  *
- * diag3: consola multilinea en pantalla. Las versiones anteriores tenian un
- * overlay de UNA linea que se sobreescribia a si mismo: el silencio era
- * indistinguible de varias fallas distintas, y "decodificando" se pintaba al
- * recibir la config — antes de que existiera un solo frame — sin probar nada.
- * Ahora cada evento queda visible con timestamp, y los eventos clave se
- * reportan tambien al POST /log del relay (consola del S25).
+ * diag4: la consola es evidencia, no se destruye. En diag3, cualquier
+ * mensaje "error:" reconstrulia la UI de config EN EL MISMO INSTANTE —
+ * la consola con el diagnostico desaparecia en un flash justo cuando iba
+ * a mostrar el problema ("trata de iniciarse, glitch, desaparece").
+ * Ahora: el error queda impreso como ultima linea de la consola y aparece
+ * un boton "Volver"; la consola sobrevive.
+ *
+ * Ademas: capturador global de crashes. Un crash de la app antes era
+ * invisible (la app simplemente se cerraba). Ahora el stack trace se
+ * persiste en prefs, se reporta al POST /log del relay y se muestra al
+ * reabrir la app. Nada muere en silencio.
  */
 class MainActivity : Activity() {
 
     companion object {
-        const val BUILD = "diag3"
+        const val BUILD = "diag4"
     }
 
     private lateinit var prefs: SharedPreferences
     private var wsClient: WsClient? = null
     private var decoder: VideoDecoder? = null
     private var overlay: TextView? = null
+    private var frameRoot: FrameLayout? = null
+    private var backBtn: Button? = null
     private val logBuf = StringBuilder()
     private val t0 = System.currentTimeMillis()
+    private var prevHandler: Thread.UncaughtExceptionHandler? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("wtm", Context.MODE_PRIVATE)
+        prevHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            persistCrash(t, e)
+            prevHandler?.uncaughtException(t, e)
+        }
         buildConfigUI("")
+    }
+
+    /**
+     * Crash -> prefs (sincrono, rapido) + reporte best-effort al /log del
+     * relay con la cookie documentada (wtm_session=token).
+     */
+    private fun persistCrash(t: Thread, e: Throwable) {
+        val text = "CRASH ${t.name}: $e\n" + e.stackTraceToString().take(3000)
+        try { prefs.edit().putString("last_crash", text).commit() } catch (_: Exception) {}
+        val url = prefs.getString("base_url", null) ?: return
+        val token = prefs.getString("viewer_token", null) ?: return
+        val reporter = Thread {
+            try {
+                val host = java.net.URI(url).host ?: return@Thread
+                val ctx = SSLContext.getInstance("TLS")
+                ctx.init(null, arrayOf<TrustManager>(object : X509TrustManager {
+                    override fun checkClientTrusted(c: Array<X509Certificate>, a: String) {}
+                    override fun checkServerTrusted(c: Array<X509Certificate>, a: String) {}
+                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                }), SecureRandom())
+                val conn = URL(url.trimEnd('/') + "/log").openConnection() as HttpsURLConnection
+                conn.sslSocketFactory = ctx.socketFactory
+                conn.hostnameVerifier = HostnameVerifier { _, _ -> true }
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.connectTimeout = 4000
+                conn.readTimeout = 4000
+                conn.setRequestProperty("Content-Type", "text/plain")
+                conn.setRequestProperty("Cookie", "wtm_session=$token")
+                conn.setRequestProperty("Origin", "https://$host")
+                conn.outputStream.use { it.write(("viewer $BUILD " + text).toByteArray(Charsets.UTF_8)) }
+                conn.responseCode
+                conn.disconnect()
+            } catch (_: Exception) {}
+        }
+        try { reporter.start(); reporter.join(4000) } catch (_: Exception) {}
     }
 
     private fun buildConfigUI(initialStatus: String) {
@@ -68,6 +125,17 @@ class MainActivity : Activity() {
             setTextColor(if (initialStatus.startsWith("ERROR")) Color.parseColor("#FF6A6A") else Color.WHITE)
         }
         val connectBtn = Button(this).apply { text = "Conectar" }
+
+        // crash capturado en la sesion anterior: mostrarlo y limpiarlo
+        val lastCrash = prefs.getString("last_crash", null)
+        if (lastCrash != null) {
+            root.addView(TextView(this).apply {
+                text = "ULTIMO CRASH:\n${lastCrash.take(1500)}"
+                setTextColor(Color.parseColor("#FF6A6A"))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+            })
+            prefs.edit().remove("last_crash").apply()
+        }
 
         connectBtn.setOnClickListener {
             val url = urlInput.text.toString().trim()
@@ -96,6 +164,7 @@ class MainActivity : Activity() {
 
     private fun startStream(url: String, token: String) {
         synchronized(logBuf) { logBuf.setLength(0) }
+        backBtn = null
 
         val surfaceView = SurfaceView(this)
         val statusOverlay = TextView(this).apply {
@@ -127,6 +196,7 @@ class MainActivity : Activity() {
                 Gravity.TOP
             )
         )
+        frameRoot = frame
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(frame)
         showStatus("viewer build=$BUILD")
@@ -139,8 +209,6 @@ class MainActivity : Activity() {
                 wsClient = WsClient(
                     baseUrl = url,
                     viewerToken = token,
-                    // config del server TAL CUAL: el codec queda registrado en
-                    // la consola — avc1 (H.264) o hvc1 (HEVC), con evidencia
                     onConfig = { codec, width, height, csd ->
                         showStatus("config del server: codec=$codec ${width}x${height} csd=${csd.size}B")
                         decoder?.configure(codec, width, height, csd)
@@ -159,10 +227,13 @@ class MainActivity : Activity() {
         })
     }
 
-    /** Consola: cada evento appendea con timestamp; error → volver a config. */
+    /**
+     * Consola: appendea con timestamp. Error -> NO se destruye la consola
+     * (la evidencia queda en pantalla); solo aparece un boton "Volver".
+     */
     private fun showStatus(msg: String) {
         val secs = (System.currentTimeMillis() - t0) / 1000
-        val line = "[" + secs + "s] " + msg
+        val line = "[$secs s] $msg"
         val text: String
         synchronized(logBuf) {
             logBuf.append(line).append('\n')
@@ -182,9 +253,29 @@ class MainActivity : Activity() {
             if (msg.startsWith("error:")) {
                 wsClient?.close()
                 decoder?.release()
-                buildConfigUI("ERROR: " + msg.removePrefix("error: ").removePrefix("error:"))
+                showBackButton()
             }
         }
+    }
+
+    /** Boton Volver sobre la consola — la consola nunca se destruye. */
+    private fun showBackButton() {
+        if (backBtn != null) return
+        val b = Button(this).apply { text = "Volver" }
+        b.setOnClickListener {
+            backBtn = null
+            frameRoot = null
+            buildConfigUI("")
+        }
+        backBtn = b
+        frameRoot?.addView(
+            b,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            ).apply { bottomMargin = dp(16) }
+        )
     }
 
     private fun dp(v: Int): Int =
