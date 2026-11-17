@@ -31,18 +31,17 @@ import javax.net.ssl.X509TrustManager
 /**
  * Stage 1 (issue #16): viewer nativo.
  *
- * diag9: el selftest de diag8 demostro que el stack de codecs de la
- * tablet esta SANO (8/8 loopbacks con frames), y la aritmetica de todas
- * las sesiones destapo que cada AU llega con 4 bytes de mas tras el NAL
- * declarado (prefijo de NAL vacio del server) — un AU malformado que el
- * parser estricto de MediaCodec descarta en silencio y Chrome tolera.
- * El saneador vive en VideoDecoder.kt; aqui solo cambia el numero de
- * build. Se conserva toda la telemetria de diag5-8.
+ * diag10: Chrome con ?hw=prefer-hardware muestra VIDEO en la misma tablet
+ * — decodifica este stream via hardware. La diferencia estructural que
+ * quedaba contra mi app: Chrome alimenta MediaCodec en ANNEX-B (start
+ * codes), mi app alimentaba length-prefixed + hvcC en csd-0. El cambio a
+ * Annex-B de punta a punta vive en VideoDecoder.kt; aqui solo cambia el
+ * numero de build. Se conserva toda la telemetria de diag5-9.
  */
 class MainActivity : Activity() {
 
     companion object {
-        const val BUILD = "diag9"
+        const val BUILD = "diag10"
     }
 
     private lateinit var prefs: SharedPreferences

@@ -10,21 +10,24 @@ import java.nio.ByteBuffer
 /**
  * Decodificador -> Surface directo (issue #16, stage 1).
  *
- * diag9: LA PISTA. Aritmetica de todas las sesiones (diag5-8): cada AU
- * termina con EXACTAMENTE 4 bytes de mas tras el NAL declarado (707078
- * vs 707074; 706886 vs 706882; 706983 vs 706979; 707005 vs 707001) — un
- * prefijo de NAL de longitud 0, residuo del ensamblado en el server.
- * El selftest de diag8 demostro que el stack de la tablet esta SANO
- * (HEVC/AVC, 640x480 y 2000x1200, bytebuffer y surface: 8/8 loopbacks
- * con frames). Un AU malformado es descartado en silencio por parsers
- * estrictos de MediaCodec (out=0 sin error en los TRES decoders) y
- * tolerado por Chrome (por eso el cliente web funciona). diag9 SANEA el
- * AU antes de alimentar el decoder: recorre la estructura NAL por NAL
- * y descarta todo trailer invalido.
+ * diag10: LA PISTA DEFINITIVA. Con "?hw=prefer-hardware" el cliente web
+ * muestra VIDEO en la misma tablet — o sea Chrome decodifica este stream
+ * via hardware. Mi app usaba el mismo MediaCodec y out=0. La diferencia
+ * estructural que queda: Chrome alimenta el decoder en formato ANNEX-B
+ * (start codes 00 00 00 01, csd-0 como VPS/SPS/PPS con start codes),
+ * mientras mi app alimentaba length-prefixed + hvcC en csd-0. Es tambien
+ * exactamente el formato que usa scrcpy (probado en Samsunges de todo
+ * pelaje). diag10 convierte TODO a Annex-B antes del decoder:
  *
- * Se conserva todo diag8 (b453b90): rotacion valida (boot completo + IDR
- * re-inyectado por decoder), pedido de IDR fresco ("t":"idr", el recovery
- * del cliente web), log del tipo NAL real, pts local monotónico.
+ *  - csd-0 = VPS+SPS+PPS del hvcC re-empaquetados con start codes
+ *  - cada AU: prefijos de 4 bytes -> 00 00 00 01 (NAL por NAL)
+ *  - keyframes llevan VPS/SPS/PPS in-band al inicio (estilo scrcpy)
+ *  - el IDR capturado se guarda en Annex-B para re-inyeccion
+ *
+ * Se conserva todo diag8/9: rotacion valida (boot completo + IDR
+ * re-inyectado por decoder), "t":"idr" fresco en cada rotacion, log de
+ * tipo NAL, pts local monotónico, saneador (defensa barata aunque los
+ * AUs llegaban limpios).
  */
 class VideoDecoder(
     private val surface: Surface,
@@ -34,6 +37,7 @@ class VideoDecoder(
     companion object {
         private const val SILENCE_TICKS = 3          // 3 ticks de 2s = 6s de out=0
         private val KEY_NALS = setOf(19, 20, 21)      // IDR_W_RADL, IDR_N_LP, CRA_NUT
+        private val START_CODE = byteArrayOf(0, 0, 0, 1)
     }
 
     private class Pending(val data: ByteArray, val pts: Long, val isCsd: Boolean)
@@ -52,9 +56,6 @@ class VideoDecoder(
     private var realFed = 0L
     private var frameCounter = 0L
     private var loggedAus = 0
-    private var sanitized = 0L
-    private var bytesStripped = 0L
-    private var badAus = 0L
     private var configuredAt = 0L
 
     private val freeInputs = ArrayDeque<Int>()
@@ -64,8 +65,9 @@ class VideoDecoder(
     private var lastMime = ""
     private var lastW = 0
     private var lastH = 0
-    private var lastCsd: ByteArray = ByteArray(0)
-    private var keyAu: ByteArray? = null
+    private var lastCsd: ByteArray = ByteArray(0)   // hvcC crudo del server
+    private var annexbCsd: ByteArray = ByteArray(0) // VPS/SPS/PPS con start codes
+    private var keyAu: ByteArray? = null            // IDR en Annex-B
 
     private val decoderNames = mutableListOf<String>()
     private var decoderIdx = 0
@@ -91,18 +93,41 @@ class VideoDecoder(
             keyAu = null
             loggedAus = 0
             frameCounter = 0
-            sanitized = 0
-            bytesStripped = 0
-            badAus = 0
         }
         lastCodecName = codecName
         lastMime = mime
         lastW = width
         lastH = height
         lastCsd = csd
+        annexbCsd = buildAnnexbCsd(csd)
+        if (annexbCsd.isEmpty()) {
+            onStatus("csd: no se pudieron extraer los NALs (hvcC/avcC raro) — abortando")
+            return
+        }
+        onStatus("csd Annex-B: ${annexbCsd.size}B (VPS/SPS/PPS con start codes, estilo scrcpy)")
         openDecoder(null)
         onStatus("pidiendo IDR fresco al server ({\"t\":\"idr\"} — como el cliente web)")
         onNeedKey()
+    }
+
+    /**
+     * csd Annex-B para el formato: NALs del hvcC/avcC unidos con start
+     * codes 00 00 00 01 — asi configuran csd-0 scrcpy/VLC y Chrome-Android
+     * para AVC (SPS+PPS) y HEVC (VPS+SPS+PPS).
+     */
+    private fun buildAnnexbCsd(csd: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        if (lastMime == MediaFormat.MIMETYPE_VIDEO_HEVC) {
+            for (nal in nalsFromHvcC(csd)) {
+                out.write(START_CODE); out.write(nal)
+            }
+        } else {
+            // avcC: sps en csd-0, pps en csd-1 — aqui unimos ambos en csd-0
+            val (sps, pps) = nalsFromAvcC(csd) ?: return ByteArray(0)
+            out.write(START_CODE); out.write(sps)
+            out.write(START_CODE); out.write(pps)
+        }
+        return out.toByteArray()
     }
 
     /** Abre (o reabre) un decoder. name=null -> el preferido del sistema. */
@@ -122,7 +147,9 @@ class VideoDecoder(
             configuredAt = System.currentTimeMillis()
 
             val format = MediaFormat.createVideoFormat(lastMime, lastW, lastH).apply {
-                setByteBuffer("csd-0", ByteBuffer.wrap(lastCsd))
+                // csd-0 ANNEX-B (no el hvcC crudo): el formato que OMX/c2
+                // Samsung mastican de buena gana (scrcpy/VLC/Chrome lo usan)
+                setByteBuffer("csd-0", ByteBuffer.wrap(annexbCsd))
                 setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 4 * 1024 * 1024)
             }
             val c: MediaCodec
@@ -178,17 +205,14 @@ class VideoDecoder(
                 decoderNames.add(activeName)
                 fillDecoderListLocked()
             }
-            onStatus("decoder activo: '$activeName' — $lastMime ${lastW}x${lastH} csd=${lastCsd.size}B")
+            onStatus("decoder activo: '$activeName' — $lastMime ${lastW}x${lastH} modo ANNEX-B")
 
-            pending.addLast(Pending(lastCsd, 0L, true))
-            val paramsAu = paramsAuFromCsd()
-            if (paramsAu != null) {
-                pending.addLast(Pending(paramsAu, 0L, true))
-            }
+            // boot del decoder: csd via input + IDR re-inyectado (si hay)
+            pending.addLast(Pending(annexbCsd, 0L, true))
             val k = keyAu
             if (k != null) {
                 pending.addLast(Pending(k, 0L, false))
-                onStatus("re-inyectando IDR capturado (${k.size}B) al decoder nuevo")
+                onStatus("re-inyectando IDR capturado (${k.size}B, Annex-B) al decoder nuevo")
             } else {
                 onStatus("sin IDR capturado aun — esperando el keyframe del server")
             }
@@ -212,68 +236,36 @@ class VideoDecoder(
     }
 
     /**
-     * SANEADOR (diag9): recorre el AU NAL por NAL y corta en el primer
-     * prefijo invalido (longitud 0 o incompleta). El server deja un
-     * trailer de 4 bytes (prefijo de NAL vacio) en CADA AU — la causa mas
-     * probable del out=0 silencioso en parsers estrictos de MediaCodec.
-     * Devuelve null si el AU no tiene ni un NAL resolvible.
-     */
-    private fun sanitizeAu(au: ByteArray): ByteArray? {
-        var i = 0
-        var end = 0
-        var nals = 0
-        while (i + 4 <= au.size) {
-            val len = ((au[i].toInt() and 0xFF) shl 24) or ((au[i + 1].toInt() and 0xFF) shl 16) or
-                ((au[i + 2].toInt() and 0xFF) shl 8) or (au[i + 3].toInt() and 0xFF)
-            if (len <= 0 || i + 4 + len > au.size) break
-            i += 4 + len
-            end = i
-            nals++
-        }
-        if (end == au.size) return au                      // AU limpio
-        if (end == 0) return null                          // nada resolvible
-        return au.copyOfRange(0, end)
-    }
-
-    /**
-     * Encola un frame saneado con pts LOCAL monotónico. Los primeros 3
-     * AUs se loguean con su tipo NAL real (IDR=19/20, CRA=21).
+     * Encola un frame convertido a ANNEX-B con pts local. Los keyframes
+     * (NAL tipo 19/20/21) llevan VPS/SPS/PPS in-band al inicio — estilo
+     * scrcpy, que funciona en Samsunges de todo pelaje. El IDR se guarda
+     * en Annex-B para re-inyeccion en rotaciones.
      */
     fun feed(data: ByteArray, ts: Long) {
         if (released || !configured) return
         val c = codec ?: return
 
-        val clean = sanitizeAu(data)
-        if (clean == null) {
-            badAus++
-            if (badAus <= 3)
-                onStatus("AU descartado: sin NAL resolvible (${data.size}B)")
-            return
-        }
-        if (clean.size != data.size) {
-            sanitized++
-            bytesStripped += (data.size - clean.size)
-            if (sanitized == 1L) {
-                onStatus("AU SANEADO: ${data.size}B -> ${clean.size}B — descartado " +
-                    "trailer invalido de ${data.size - clean.size}B (prefijo de NAL vacio " +
-                    "del server; la causa probable del silencio del decoder)")
-            } else if (sanitized % 300 == 0L) {
-                onStatus("saneados: $sanitized AUs ($bytesStripped B de trailers descartados)")
-            }
-        }
+        val nal = firstNalType(data)
+        val isKey = nal != null && KEY_NALS.contains(nal)
+        val ab = toAnnexB(data) ?: return
+        val payload = if (isKey) {
+            val b = ByteArrayOutputStream()
+            b.write(annexbCsd)          // params in-band antes del keyframe
+            b.write(ab)
+            b.toByteArray()
+        } else ab
 
         val pts = synchronized(lock) { ++frameCounter * 33333L }
-        val nal = firstNalType(clean)
         if (loggedAus < 3 && nal != null) {
             loggedAus++
-            val kind = if (KEY_NALS.contains(nal)) "KEY" else "delta"
-            onStatus("AU #$loggedAus: ${clean.size}B primer NAL=tipo$nal ($kind)")
+            val kind = if (isKey) "KEY" else "delta"
+            onStatus("AU #$loggedAus: ${data.size}B -> Annex-B ${payload.size}B " +
+                "primer NAL=tipo$nal ($kind${if (isKey) "+params in-band" else ""})")
         }
-        if (nal != null && KEY_NALS.contains(nal)) {
-            keyAu = clean
-        }
+        if (isKey) keyAu = payload
+
         synchronized(lock) {
-            pending.addLast(Pending(clean, pts, false))
+            pending.addLast(Pending(payload, pts, false))
             if (pending.size > 90) {
                 pending.removeFirst()
                 drops++
@@ -293,24 +285,26 @@ class VideoDecoder(
         return (au[4].toInt() and 0xFF) shr 1 and 0x3F
     }
 
-    /** VPS/SPS/PPS del hvcC re-empaquetados como AU length-prefixed. */
-    private fun paramsAuFromCsd(): ByteArray? {
-        if (lastMime != MediaFormat.MIMETYPE_VIDEO_HEVC) return null
-        val nals = nalsFromConfig(lastCsd)
-        if (nals.isEmpty()) return null
-        val au = ByteArrayOutputStream()
-        for (n in nals) {
-            au.write((n.size shr 24) and 0xFF)
-            au.write((n.size shr 16) and 0xFF)
-            au.write((n.size shr 8) and 0xFF)
-            au.write(n.size and 0xFF)
-            au.write(n)
+    /** AU length-prefixed -> Annex-B: cada NAL con start code 00 00 00 01. */
+    private fun toAnnexB(au: ByteArray): ByteArray? {
+        var i = 0
+        var nals = 0
+        val out = ByteArrayOutputStream()
+        while (i + 4 <= au.size) {
+            val len = ((au[i].toInt() and 0xFF) shl 24) or ((au[i + 1].toInt() and 0xFF) shl 16) or
+                ((au[i + 2].toInt() and 0xFF) shl 8) or (au[i + 3].toInt() and 0xFF)
+            if (len <= 0 || i + 4 + len > au.size) break
+            out.write(START_CODE)
+            out.write(au, i + 4, len)
+            i += 4 + len
+            nals++
         }
-        return au.toByteArray()
+        if (nals == 0) return null
+        return out.toByteArray()
     }
 
     /** Parsea los NALs de un hvcC (HEVC) — [] si no es parseable. */
-    private fun nalsFromConfig(csd: ByteArray): List<ByteArray> {
+    private fun nalsFromHvcC(csd: ByteArray): List<ByteArray> {
         val out = mutableListOf<ByteArray>()
         try {
             if (csd.size < 23 || csd[0].toInt() != 1) return out
@@ -318,7 +312,7 @@ class VideoDecoder(
             var i = 23
             for (a in 0 until numArrays) {
                 if (i + 3 > csd.size) return out
-                i++
+                i++ // array_completeness | nal_type
                 val numNalus = ((csd[i].toInt() and 0xFF) shl 8) or (csd[i + 1].toInt() and 0xFF)
                 i += 2
                 for (n in 0 until numNalus) {
@@ -332,6 +326,27 @@ class VideoDecoder(
             }
         } catch (_: Exception) {}
         return out
+    }
+
+    /** SPS y PPS de un avcC (H.264) — null si no es parseable. */
+    private fun nalsFromAvcC(csd: ByteArray): Pair<ByteArray, ByteArray>? {
+        try {
+            if (csd.size < 7 || csd[0].toInt() != 1) return null
+            var i = 6
+            val spsLen = ((csd[i].toInt() and 0xFF) shl 8) or (csd[i + 1].toInt() and 0xFF)
+            i += 2
+            if (i + spsLen > csd.size) return null
+            val sps = csd.copyOfRange(i, i + spsLen)
+            i += spsLen
+            val ppsCount = csd[i].toInt() and 0xFF
+            if (ppsCount < 1 || i + 3 > csd.size) return null
+            i += 1
+            val ppsLen = ((csd[i].toInt() and 0xFF) shl 8) or (csd[i + 1].toInt() and 0xFF)
+            i += 2
+            if (i + ppsLen > csd.size) return null
+            val pps = csd.copyOfRange(i, i + ppsLen)
+            return Pair(sps, pps)
+        } catch (_: Exception) { return null }
     }
 
     /** Llena inputs libres; items isCsd van con BUFFER_FLAG_CODEC_CONFIG. */
@@ -351,11 +366,11 @@ class VideoDecoder(
                 c.queueInputBuffer(idx, 0, p.data.size, p.pts, flags)
                 framesFed++
                 if (p.isCsd) {
-                    onStatus("csd/params via input (CODEC_CONFIG): ${p.data.size}B")
+                    onStatus("csd Annex-B via input (CODEC_CONFIG): ${p.data.size}B")
                 } else {
                     realFed++
                     if (realFed == 1L)
-                        onStatus("primer AU real: ${p.data.size}B pts=${p.pts} us (decoder='$activeName')")
+                        onStatus("primer AU Annex-B: ${p.data.size}B pts=${p.pts} us (decoder='$activeName')")
                 }
             } catch (e: Exception) {
                 onStatus("decoder error entrada: ${e.message}")
@@ -383,7 +398,7 @@ class VideoDecoder(
                     f = freeInputs.size
                 }
                 onStatus("decoder vivo ('$activeName'): in=$framesFed out=$framesOut " +
-                    "pend=$p libres=$f drops=$drops saneados=$sanitized")
+                    "pend=$p libres=$f drops=$drops")
             }
         }.apply { isDaemon = true }.start()
     }
@@ -403,8 +418,8 @@ class VideoDecoder(
             }
             if (next == null) {
                 exhausted = true
-                onStatus("decoder: AGOTADOS ${decoderNames.size} decoders " +
-                    "[${decoderNames.joinToString(", ")}] — todos recibieron csd+IDR saneados y out=0")
+                onStatus("decoder: AGOTADOS ${decoderNames.size} decoders en modo Annex-B " +
+                    "[${decoderNames.joinToString(", ")}] — todos con csd+IDR+params in-band")
                 return
             }
             onStatus("decoder: '$activeName' consume sin producir — ROTANDO a '$next' " +
