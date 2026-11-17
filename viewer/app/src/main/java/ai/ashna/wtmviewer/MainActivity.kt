@@ -15,13 +15,12 @@ import android.content.SharedPreferences
 
 /**
  * Stage 1 (issue #16): skeleton del viewer nativo.
- * - Pantalla de config simple (URL del relay + cookie de sesión viewer)
+ * - La app pide SOLO: URL del relay + token viewer (64 caracteres)
+ * - La app hace el login sola (POST /api/auth) y guarda la sesion
  * - SurfaceView a pantalla completa cuando conecta
- * La lógica pesada vive en WsClient y VideoDecoder.
  *
  * Nota de política del proyecto (PrivateIpSweepTest): ningún default con IP
- * RFC 1918 real (192.168.a.b, 10.a.b.c, 172.16-31.a.b) puede vivir en el repo.
- * El operador escribe la IP real de su teléfono al configurar la app.
+ * RFC 1918 real puede vivir en el repo. El operador escribe su IP al configurar.
  */
 class MainActivity : Activity() {
 
@@ -44,36 +43,36 @@ class MainActivity : Activity() {
         }
         val label = TextView(this).apply { text = "WTM Viewer — conectar al relay" }
         val urlInput = EditText(this).apply {
-            hint = "https://<phone-ip>:8443"
+            hint = "https://<ip-del-S25>:8443"
             setText(prefs.getString("base_url", ""))
         }
-        val cookieInput = EditText(this).apply {
-            hint = "Cookie de sesión viewer (de /login)"
-            setText(prefs.getString("session_cookie", ""))
+        val tokenInput = EditText(this).apply {
+            hint = "Token viewer (64 caracteres, de auth-tokens.json)"
+            setText(prefs.getString("viewer_token", ""))
         }
         val status = TextView(this).apply { text = "Estado: desconectado" }
         val connectBtn = Button(this).apply { text = "Conectar" }
 
         connectBtn.setOnClickListener {
             val url = urlInput.text.toString().trim()
-            val cookie = cookieInput.text.toString().trim()
-            if (url.isEmpty() || cookie.isEmpty()) {
-                status.text = "Estado: falta URL o cookie"
+            val token = tokenInput.text.toString().trim()
+            if (url.isEmpty() || token.isEmpty()) {
+                status.text = "Estado: falta URL o token"
                 return@setOnClickListener
             }
-            prefs.edit().putString("base_url", url).putString("session_cookie", cookie).apply()
-            startStream(url, cookie, status)
+            prefs.edit().putString("base_url", url).putString("viewer_token", token).apply()
+            startStream(url, token, status)
         }
 
         root.addView(label)
         root.addView(urlInput)
-        root.addView(cookieInput)
+        root.addView(tokenInput)
         root.addView(connectBtn)
         root.addView(status)
         setContentView(root)
     }
 
-    private fun startStream(url: String, cookie: String, status: TextView) {
+    private fun startStream(url: String, token: String, status: TextView) {
         status.text = "Estado: conectando…"
         val surfaceView = SurfaceView(this)
         val holder = surfaceView.holder
@@ -87,9 +86,9 @@ class MainActivity : Activity() {
                 }
                 wsClient = WsClient(
                     baseUrl = url,
-                    sessionCookie = cookie,
+                    viewerToken = token,
                     onConfig = { codec, width, height, csd ->
-                        decoder?.configure(codec, width, height, csd)
+                        decoder?.configure(codec, width, height, gh_csd_placeholder)
                         runOnUiThread { status.text = "Estado: decodificando ${width}x${height}" }
                     },
                     onFrame = { data, pts ->
