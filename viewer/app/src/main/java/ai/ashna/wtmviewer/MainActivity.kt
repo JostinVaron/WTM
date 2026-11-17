@@ -160,14 +160,15 @@ class MainActivity : Activity() {
 
         // consola PERSISTIDA de la sesion anterior
         val lastConsole = prefs.getString("last_console", null)
-        val hasConsole = lastConsole != null && lastConsole.isNotEmpty()
-        if (hasConsole) {
+        val hasConsole = !lastConsole.isNullOrEmpty()
+        if (lastConsole != null && lastConsole.isNotEmpty()) {
             root.addView(TextView(this).apply {
                 text = "ULTIMA SESION (persistida):"
                 setTextColor(Color.parseColor("#7FFF7F"))
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             })
             root.addView(TextView(this).apply {
+                // null-check directo arriba: smart cast valida el take()
                 text = lastConsole.take(6000)
                 setTextColor(Color.parseColor("#7FFF7F"))
                 typeface = Typeface.MONOSPACE
