@@ -1,0 +1,36 @@
+apply plugin: 'com.android.application'
+apply plugin: 'kotlin-android'
+
+android {
+    namespace 'ai.ashna.wtmviewer'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'ai.ashna.wtmviewer'
+        minSdk 29
+        targetSdk 34
+        versionCode 1
+        versionName '0.1.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+}
+
+dependencies {
+    // Sin dependencias externas: WebSocket vía HttpURLConnection (AOSP),
+    // JSON vía org.json (AOSP), decodificación vía MediaCodec (AOSP).
+    // Cero DSL de red externo = APK mínimo y sin supply-chain.
+}
