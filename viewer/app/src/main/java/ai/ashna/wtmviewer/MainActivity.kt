@@ -23,9 +23,9 @@ import android.content.SharedPreferences
  * - La app pide SOLO: URL del relay + token viewer
  * - La app hace login sola (POST /api/auth) y recibe la cookie
  * - El video va en SurfaceView a pantalla completa, con un overlay de
- *   estado SIEMPRE visible encima (lecciones del primer APK: el swap de
- *   setContentView escondia el estado tras la pantalla negra y ante datos
- *   malos el usuario no veia nada).
+ *   estado SIEMPRE visible encima.
+ * - El codec lo decide el server via config ("avc1.*" H.264 scrcpy por
+ *   defecto, "hvc1.*" HEVC issue #4) — no se hardcodea.
  * - Ante error: vuelve a la pantalla de config mostrando el motivo.
  */
 class MainActivity : Activity() {
@@ -127,8 +127,10 @@ class MainActivity : Activity() {
                 wsClient = WsClient(
                     baseUrl = url,
                     viewerToken = token,
-                    onConfig = { _, width, height, csd ->
-                        decoder?.configure("hevc", width, height, csd)
+                    // codec tal cual lo declara el server: "avc1.*" H.264,
+                    // "hvc1.*" HEVC — el decoder decide el mime
+                    onConfig = { codec, width, height, csd ->
+                        decoder?.configure(codec, width, height, csd)
                         showStatus("decodificando ${width}x${height}")
                     },
                     onFrame = { data, pts -> decoder?.feed(data, pts) },
