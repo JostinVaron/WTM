@@ -3,9 +3,11 @@ package ai.ashna.wtmviewer
 import android.app.Activity
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -31,33 +33,39 @@ import javax.net.ssl.X509TrustManager
 /**
  * WTM Viewer — viewer nativo del relay (issue #16).
  *
- * Produccion (post diag10): la consola de diagnostico YA NO se muestra
- * sobre el video — desaparece sola en cuanto el primer frame llega al
- * surface (la franja grisacea que se veia arriba era ese overlay). El
- * pipeline Annex-B (el fix que hizo funcionar el video: length-prefixed
- * -> start codes, csd-0 como VPS/SPS/PPS con start codes, params in-band
- * en keyframes) vive en VideoDecoder.kt.
+ * v1.1-perf1 — RENDIMIENTO MEDIBLE:
+ *  - HUD de perf (toca la pantalla para mostrarlo/ocultarlo): fps
+ *    renderizados, latencia captura->llegada media (ms), rtt, decoder
+ *    activo, render-drops y cola. Los numeros con los que se optimiza.
+ *  - Heartbeat WiFi 25 ms + sync de reloj en WsClient (la radio no
+ *    entra en power-save; el offset NTP-style permite medir latencia
+ *    por frame).
+ *  - Render-drop policy en VideoDecoder (latest-wins bajo atasco).
  *
- * Se conserva del arsenal de diagnostico SOLO lo util para el usuario:
- * estado de conexion en pantalla hasta que hay video, errores con boton
- * Volver, crash-report al relay, y "Compartir log" en la pantalla de
- * configuracion (el log completo sigue persistiendose a disco).
+ * El HUD es provisional hasta v1.3 (overlay de dos dedos); por ahora un
+ * tap lo alterna — no interfiere porque el táctil de control todavia no
+ * esta implementado (llega en v1.2).
  */
 class MainActivity : Activity() {
 
     companion object {
-        const val BUILD = "1.0"
+        const val BUILD = "1.1-perf1"
     }
 
     private lateinit var prefs: SharedPreferences
     private var wsClient: WsClient? = null
     private var decoder: VideoDecoder? = null
     private var overlay: TextView? = null
+    private var hud: TextView? = null
     private var frameRoot: FrameLayout? = null
     private var backBtn: Button? = null
     private val logBuf = StringBuilder()
     private val t0 = System.currentTimeMillis()
     private var prevHandler: Thread.UncaughtExceptionHandler? = null
+    private var hudVisible = false
+    @Volatile private var hudRunning = false
+    private var lastRendered = 0L
+    private var lastRenderedAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -187,7 +195,6 @@ class MainActivity : Activity() {
         backBtn = null
 
         val surfaceView = SurfaceView(this)
-        // Estado de conexion: MINIMAL y desaparece en cuanto hay video.
         val statusOverlay = TextView(this).apply {
             text = "conectando..."
             setTextColor(Color.WHITE)
@@ -198,6 +205,18 @@ class MainActivity : Activity() {
             visibility = View.VISIBLE
         }
         overlay = statusOverlay
+
+        // HUD de perf: esquina superior derecha, tap para alternar.
+        val hudView = TextView(this).apply {
+            setTextColor(Color.parseColor("#7FFF7F"))
+            typeface = Typeface.MONOSPACE
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+            setBackgroundColor(Color.argb(0x66, 0x00, 0x00, 0x00))
+            val pad = dp(6)
+            setPadding(pad, pad, pad, pad)
+            visibility = View.GONE
+        }
+        hud = hudView
 
         val frame = FrameLayout(this)
         frame.addView(
@@ -215,16 +234,31 @@ class MainActivity : Activity() {
                 Gravity.CENTER
             )
         )
+        frame.addView(
+            hudView,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.END
+            ).apply { topMargin = dp(8); rightMargin = dp(8) }
+        )
         frameRoot = frame
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(frame)
         showStatus("viewer v$BUILD — conectando a $url")
 
+        // Tap sobre el video alterna el HUD (hasta v1.3 = overlay 2 dedos).
+        surfaceView.setOnTouchListener { _, ev ->
+            if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+                hudVisible = !hudVisible
+                runOnUiThread { hud?.visibility = if (hudVisible) View.VISIBLE else View.GONE }
+            }
+            true
+        }
+
         surfaceView.holder.setKeepScreenOn(true)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
-                // Cerrar la sesion previa ANTES de crear otra: el server es
-                // single-session y la conexion vieja recibia el close 4000.
                 wsClient?.close()
                 wsClient = null
                 decoder?.release()
@@ -233,9 +267,10 @@ class MainActivity : Activity() {
                     holder.surface,
                     { msg -> showStatus(msg) },
                     { runOnUiThread {
-                        overlay?.visibility = View.GONE   // video fluye: overlay fuera
+                        overlay?.visibility = View.GONE
                         backBtn?.visibility = View.GONE
                         Toast.makeText(this@MainActivity, "WTM: video activo", Toast.LENGTH_SHORT).show()
+                        startHudLoop()
                     } },
                     { wsClient?.requestKey() }
                 )
@@ -243,7 +278,6 @@ class MainActivity : Activity() {
                     baseUrl = url,
                     viewerToken = token,
                     onConfig = { codec, width, height, csd ->
-                        showStatus("stream: $codec ${width}x${height}")
                         decoder?.configure(codec, width, height, csd)
                     },
                     onFrame = { data, pts -> decoder?.feed(data, pts) },
@@ -254,10 +288,39 @@ class MainActivity : Activity() {
 
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
             override fun surfaceDestroyed(holder: SurfaceHolder) {
+                hudRunning = false
                 decoder?.release()
                 decoder = null
             }
         })
+    }
+
+    /** Refresca el HUD 2 veces/seg con los stats reales del pipeline. */
+    private fun startHudLoop() {
+        if (hudRunning) return
+        hudRunning = true
+        lastRendered = 0L
+        lastRenderedAt = System.currentTimeMillis()
+        Thread {
+            while (hudRunning) {
+                Thread.sleep(500)
+                if (!hudRunning) break
+                val d = decoder?.stats() ?: continue
+                val ws = wsClient
+                val now = System.currentTimeMillis()
+                val dt = (now - lastRenderedAt) / 1000.0
+                val fps = if (dt > 0) (d.rendered - lastRendered) / dt else 0.0
+                lastRendered = d.rendered
+                lastRenderedAt = now
+                val lat = ws?.latencyAvg() ?: 0.0
+                val rtt = ws?.rttMs() ?: -1
+                val txt = String.format(
+                    "%.0f fps  lat %.1f ms  rtt %d ms\n%s\nrender %d  rdrop %d  cola %d",
+                    fps, lat, rtt, d.decoder, d.rendered, d.renderDrops, d.queueDepth
+                )
+                runOnUiThread { hud?.text = txt }
+            }
+        }.apply { isDaemon = true }.start()
     }
 
     /**

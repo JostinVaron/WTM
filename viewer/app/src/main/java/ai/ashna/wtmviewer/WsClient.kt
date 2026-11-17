@@ -19,18 +19,20 @@ import kotlin.concurrent.thread
 
 /**
  * WebSocket minimo (RFC 6455) sobre socket TLS para hablar con el relay WTM.
- * Mismo protocolo que el cliente web (server.py / hevc.py):
- * login /api/auth con token viewer -> cookie; handshake con cookie y Origin
- * identico al Host (byte a byte, con puerto); frames binarios con prefijo
- * de 13 bytes (u8 flags | u64 ts | u32 enc) antes del AU length-prefixed.
+ * Mismo protocolo que el cliente web (server.py / hevc.py).
  *
- * diag8: agrega requestKey() — manda {"t":"idr"}, el MISMO mensaje de
- * recovery que usa el cliente web cuando pierde decodificacion, para que
- * el server pida un keyframe fresco al encoder vivo (el server lo aplica
- * con rate-limit via request_key()). El decoder de la app lo usa al
- * configurarse y en cada rotacion de decoder.
+ * v1.1-perf1 — dos piezas de latencia portadas del cliente web (que ya
+ * funcionaban ahi y faltaban en la app):
  *
- * Telemetria de dos canales: consola en pantalla + POST /log del relay.
+ *  1. HEARTBEAT WiFi (25 ms): ping bidireccional tiny para que la radio
+ *     del receptor NO entre en power-save — que agrupa paquetes por
+ *     beacon (~100 ms) y añade latencia en ráfagas. El cliente web lo
+ *     hace (HB=25 por defecto) desde siempre; la app no lo hacia.
+ *  2. SYNC de reloj NTP-style: offset = s - (c + rtt/2) con las muestras
+ *     {"t":"sync"} que el server ya responde. Con el offset calculado,
+ *     cada frame lleva su ts de captura en el prefijo -> latencia
+ *     captura->llegada MEDIBLE por frame. Esto convierte "0 ms" de
+ *     aspiracion en un numero real en pantalla.
  */
 class WsClient(
     private val baseUrl: String,
@@ -39,28 +41,61 @@ class WsClient(
     private val onFrame: (data: ByteArray, pts: Long) -> Unit,
     private val onStatus: (String) -> Unit
 ) {
+    companion object {
+        private const val HB_MS = 25L          // como el cliente web
+    }
+
     private var socket: SSLSocket? = null
     private val closed = AtomicBoolean(false)
     private var sessionCookie: String = ""
+
+    // --- reloj/latencia (v1.1-perf1) ---
+    @Volatile private var offsetMs = 0.0
+    @Volatile private var bestRtt = Long.MAX_VALUE
+    private val recentLat = ArrayDeque<Double>()
+
+    /** Media de latencia captura->llegada de los ultimos ~40 frames (ms). */
+    fun latencyAvg(): Double = synchronized(recentLat) {
+        if (recentLat.isEmpty()) 0.0 else recentLat.reduce { a, b -> a + b } / recentLat.size
+    }
+
+    fun rttMs(): Long = if (bestRtt == Long.MAX_VALUE) -1 else bestRtt
 
     fun connect() {
         thread(name = "wtm-ws") {
             try {
                 login()
-                relayLog("viewer login OK")
                 handshake()
-                relayLog("viewer ws conectado (cookie+origin OK)")
-                // sincronizacion de reloj inicial: 6 muestras como el cliente web
                 for (i in 0 until 6) {
                     sendJson("""{"t":"sync","c":${System.currentTimeMillis()}}""")
                     Thread.sleep(120)
                 }
+                startHeartbeat()
                 readLoop()
             } catch (e: Exception) {
                 if (!closed.get()) {
                     onStatus("error: ${e.message}")
-                    relayLog("viewer error: ${e.message}")
                 }
+            }
+        }
+    }
+
+    /**
+     * Heartbeat + sync periodico: mantiene la radio WiFi despierta (25 ms)
+     * y recalibra el offset de reloj cada segundo, como el cliente web.
+     */
+    private fun startHeartbeat() {
+        thread(name = "wtm-hb", isDaemon = true) {
+            var n = 0
+            while (!closed.get()) {
+                try {
+                    sendJson("""{"t":"hb"}""")
+                    if (n % 40 == 0) {
+                        sendJson("""{"t":"sync","c":${System.currentTimeMillis()}}""")
+                    }
+                    n++
+                } catch (_: Exception) {}
+                Thread.sleep(HB_MS)
             }
         }
     }
@@ -83,10 +118,6 @@ class WsClient(
 
     private val acceptHostname = HostnameVerifier { _, _ -> true }
 
-    /**
-     * Login con el token viewer: mismo POST /api/auth que hace el navegador.
-     * 401 token malo, 403 Origin, 429 throttle; 200 + Set-Cookie.
-     */
     private fun login() {
         val uri = URI(baseUrl)
         val host = uri.host ?: throw IOException("URL sin host")
@@ -125,11 +156,8 @@ class WsClient(
             setCookieValues.isNotEmpty() ->
                 setCookieValues.first().split(";").first().trim()
             else ->
-                // Fallback documentado del server.py: la cookie de sesion
-                // lleva el valor del token (session_role compara contra auth_tokens).
                 "wtm_session=$viewerToken"
         }
-        onStatus("login OK — sesion viewer activa")
     }
 
     private fun handshake() {
@@ -140,8 +168,8 @@ class WsClient(
         val raw = trustAllFactory().createSocket(host, port) as SSLSocket
         raw.startHandshake()
         socket = raw
+        raw.tcpNoDelay = true   // Nagle off: latencia sobre throughput, como el server espera
 
-        // Origin == "https://" + Host verbatim, ambos con puerto (como Chrome).
         val origin = "https://$host:$port"
         val key = java.util.Base64.getEncoder().encodeToString(ByteArray(16).also {
             SecureRandom().nextBytes(it)
@@ -187,7 +215,6 @@ class WsClient(
             val line = readLine(input)
             if (line.isEmpty()) break
         }
-        onStatus("websocket conectado")
     }
 
     private fun readLine(input: java.io.InputStream): String {
@@ -202,47 +229,10 @@ class WsClient(
         return sb.toString()
     }
 
-    /**
-     * POST /log del relay — log_handler imprime "[client] <texto>" en la
-     * consola del S25. Fire-and-forget: si falla, la consola en pantalla
-     * sigue siendo el canal primario.
-     */
-    private fun relayLog(text: String) {
-        if (sessionCookie.isEmpty()) return
-        thread(name = "wtm-log", isDaemon = true) {
-            try {
-                val uri = URI(baseUrl)
-                val host = uri.host ?: return@thread
-                val url = URL(baseUrl.trimEnd('/') + "/log")
-                val conn = url.openConnection() as HttpsURLConnection
-                conn.sslSocketFactory = trustAllFactory()
-                conn.hostnameVerifier = acceptHostname
-                conn.requestMethod = "POST"
-                conn.doOutput = true
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
-                conn.setRequestProperty("Content-Type", "text/plain")
-                conn.setRequestProperty("Cookie", sessionCookie)
-                conn.setRequestProperty("Origin", "https://$host")
-                conn.outputStream.use { it.write(text.toByteArray(Charsets.UTF_8)) }
-                conn.responseCode
-                conn.disconnect()
-            } catch (_: Exception) {}
-        }
-    }
-
     private fun readLoop() {
         val dis = DataInputStream(socket!!.inputStream)
-        var textMsgs = 0L
-        var binMsgs = 0L
-        var lastSummary = System.currentTimeMillis()
 
         while (!closed.get()) {
-            if (System.currentTimeMillis() - lastSummary >= 5000) {
-                onStatus("ws resumen: texto=$textMsgs binario=$binMsgs")
-                relayLog("viewer ws resumen: text=$textMsgs bin=$binMsgs")
-                lastSummary = System.currentTimeMillis()
-            }
             val b0 = dis.readUnsignedByte()
             val opcode = b0 and 0x0F
             val b1 = dis.readUnsignedByte()
@@ -260,38 +250,42 @@ class WsClient(
 
             when (opcode) {
                 0x1 -> {
-                    textMsgs++
                     val text = String(payload, Charsets.UTF_8)
-                    if (textMsgs <= 5)
-                        onStatus("ws texto #$textMsgs (${payload.size}B): ${text.take(90)}")
                     val m = try { JSONObject(text) } catch (_: Exception) { null }
-                    when (m?.optString("type") ?: "") {
+                    when (m?.optString("type") ?: m?.optString("t") ?: "") {
                         "config" -> {
                             val csd = android.util.Base64.decode(
                                 m!!.getString("description"), android.util.Base64.NO_WRAP
                             )
-                            relayLog("viewer config: codec=" + m.getString("codec") +
-                                " " + m.getInt("width") + "x" + m.getInt("height") +
-                                " csd=" + csd.size + "B")
                             onConfig(m.getString("codec"), m.getInt("width"), m.getInt("height"), csd)
                         }
-                        "sync" -> { /* eco de reloj: medir offset, NO responder */ }
+                        "sync" -> {
+                            // NTP-style: rtt = ahora - c; offset = s - (c + rtt/2)
+                            val now = System.currentTimeMillis()
+                            val c = m!!.optDouble("c", 0.0)
+                            val s = m.optDouble("s", 0.0)
+                            if (c > 0 && s > 0) {
+                                val rtt = now - c
+                                if (rtt in 0..10000 && rtt <= bestRtt + 2) {
+                                    bestRtt = Math.min(bestRtt, rtt)
+                                    offsetMs = s - (c + rtt / 2.0)
+                                }
+                            }
+                        }
+                        "h" -> { /* heartbeat del server */ }
                     }
                 }
                 0x2 -> {
-                    binMsgs++
-                    if (binMsgs == 1L) {
-                        val headHex = if (payload.size > 13)
-                            payload.copyOfRange(13, minOf(37, payload.size))
-                                .joinToString(" ") { String.format("%02x", it) }
-                        else "(prefijo incompleto)"
-                        onStatus("PRIMER BINARIO: ${payload.size}B flags=0x" +
-                            String.format("%02x", payload[0]) + " head=" + headHex)
-                        relayLog("viewer primer binario: ${payload.size}B head=$headHex")
-                    }
                     if (payload.size <= 13) continue
-                    val tsUs = readU64(payload, 1)
-                    onFrame(payload.copyOfRange(13, payload.size), tsUs)
+                    val serverTsMs = readU64(payload, 1) / 1000.0
+                    if (offsetMs != 0.0) {
+                        val lat = System.currentTimeMillis() - (serverTsMs - offsetMs)
+                        synchronized(recentLat) {
+                            recentLat.addLast(lat)
+                            if (recentLat.size > 40) recentLat.removeFirst()
+                        }
+                    }
+                    onFrame(payload.copyOfRange(13, payload.size), readU64(payload, 1))
                 }
                 0x8 -> {
                     val code = if (payload.size >= 2)
@@ -300,8 +294,7 @@ class WsClient(
                     val reason = if (payload.size > 2)
                         String(payload.copyOfRange(2, payload.size), Charsets.UTF_8)
                     else ""
-                    onStatus("ws CERRADO por el server: code=$code razon='$reason'")
-                    relayLog("viewer ws close: code=$code razon='$reason'")
+                    onStatus("error: sesion cerrada por el server (code=$code $reason)")
                     close()
                     return
                 }

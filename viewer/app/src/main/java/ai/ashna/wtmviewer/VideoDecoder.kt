@@ -10,16 +10,18 @@ import java.nio.ByteBuffer
 /**
  * Decodificador HEVC/H264 -> Surface directo (issue #16).
  *
- * El hallazgo central (diag10): los decoders de esta tablet rechazan en
- * silencio el formato length-prefixed + hvcC en csd-0, pero decodifican
- * perfecto en ANNEX-B (start codes 00 00 00 01, csd-0 = VPS/SPS/PPS con
- * start codes, params in-band en cada keyframe) — el formato que usa
- * scrcpy y el que Chrome alimenta a MediaCodec. Verificado con video
- * real: 1500+ frames, 0 drops, hardware Qualcomm.
+ * Pipeline Annex-B verificado (v1.0). v1.1-perf1 agrega dos cosas de
+ * rendimiento:
  *
- * Produccion: la instrumentacion de diagnostico se retira; el watchdog
- * sigue dentro como red de seguridad (silencioso mientras hay frames) y
- * la rotacion de decoders se mantiene como fallback automatico.
+ *  1. RENDER-DROP POLICY: si el decoder entrega un frame delta con pts
+ *     muy retrasado respecto al mas nuevo ya visto (>120 ms), se suelta
+ *     SIN renderizar — en una ráfaga de red el display salta directo al
+ *     frame fresco en vez de reproducir el atasco frame a frame. Es la
+ *     política de "latest wins" que usan los reproductores de baja
+ *     latencia; los keyframes nunca se dropean.
+ *  2. STATS para el HUD de la app: frames renderizados, render-drops y
+ *     cola — los numeros con los que se optimiza (no se optimiza lo que
+ *     no se mide).
  */
 class VideoDecoder(
     private val surface: Surface,
@@ -28,10 +30,18 @@ class VideoDecoder(
     private val onNeedKey: () -> Unit
 ) {
     companion object {
-        private const val SILENCE_TICKS = 3          // 3 ticks de 2s = 6s sin frames
-        private val KEY_NALS = setOf(19, 20, 21)      // IDR_W_RADL, IDR_N_LP, CRA_NUT
+        private const val SILENCE_TICKS = 3
+        private val KEY_NALS = setOf(19, 20, 21)
         private val START_CODE = byteArrayOf(0, 0, 0, 1)
+        private const val DROP_LAG_US = 120_000L   // 120 ms de atraso -> render-drop
     }
+
+    class Stats(
+        val decoder: String,
+        val rendered: Long,
+        val renderDrops: Long,
+        val queueDepth: Int
+    )
 
     private class Pending(val data: ByteArray, val pts: Long, val isCsd: Boolean)
 
@@ -45,8 +55,10 @@ class VideoDecoder(
 
     private var framesFed = 0L
     private var framesOut = 0L
+    private var renderDrops = 0L
     private var drops = 0L
     private var frameCounter = 0L
+    private var maxSeenPts = 0L
     private var lastErrorLog = 0L
 
     private val freeInputs = ArrayDeque<Int>()
@@ -60,6 +72,11 @@ class VideoDecoder(
 
     private val decoderNames = mutableListOf<String>()
     private var decoderIdx = 0
+
+    /** Snapshot para el HUD (thread-safe). */
+    fun stats(): Stats = synchronized(lock) {
+        Stats(activeName, framesOut, renderDrops, pending.size)
+    }
 
     /** "avc1.*" -> H.264, "hvc1.*"/"hev1.*" -> HEVC; otro -> error visible. */
     private fun mimeOf(codecName: String): String? = when {
@@ -81,6 +98,7 @@ class VideoDecoder(
             exhausted = false
             keyAu = null
             frameCounter = 0
+            maxSeenPts = 0
         }
         lastMime = mime
         lastW = width
@@ -118,7 +136,9 @@ class VideoDecoder(
             pending.clear()
             framesFed = 0
             framesOut = 0
+            renderDrops = 0
             drops = 0
+            maxSeenPts = 0
             released = false
             session += 1
             mySession = session
@@ -143,6 +163,16 @@ class VideoDecoder(
                     override fun onOutputBufferAvailable(m: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
                         if (released) return
                         try {
+                            // RENDER-DROP: delta muy retrasado -> no se pinta.
+                            // El display salta al frame fresco en vez de
+                            // reproducir el atasco frame a frame.
+                            val lag = maxSeenPts - info.presentationTimeUs
+                            if (framesOut > 3 && lag > DROP_LAG_US) {
+                                m.releaseOutputBuffer(index, false)
+                                renderDrops++
+                                return
+                            }
+                            if (info.presentationTimeUs > maxSeenPts) maxSeenPts = info.presentationTimeUs
                             m.releaseOutputBuffer(index, true)
                             framesOut++
                             if (framesOut == 1L) onFirstFrame()
@@ -323,11 +353,7 @@ class VideoDecoder(
         }
     }
 
-    /**
-     * Watchdog silencioso: solo actua si hay input fluyendo y CERO frames
-     * (rotacion de decoder + keyframe fresco). Con video fluyendo, no emite
-     * nada — en produccion la consola no existe mientras hay video.
-     */
+    /** Watchdog silencioso: actua solo si hay input fluyendo y CERO frames. */
     private fun startWatchdog(mySession: Long) {
         Thread {
             var tick = 0
@@ -338,9 +364,6 @@ class VideoDecoder(
                 if (framesOut == 0L && framesFed > 0L && !exhausted && tick >= SILENCE_TICKS) {
                     rotateNext()
                     break
-                }
-                if (framesOut == 0L && framesFed > 0L && tick % 15 == 0) {
-                    logRateLimited("sin frames (in=$framesFed) — esperando keyframe")
                 }
             }
         }.apply { isDaemon = true }.start()
