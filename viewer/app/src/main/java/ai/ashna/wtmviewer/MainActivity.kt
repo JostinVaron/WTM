@@ -8,7 +8,6 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
@@ -96,7 +95,7 @@ class MainActivity : Activity() {
             setTextColor(Color.parseColor("#7FFF7F"))
             typeface = Typeface.MONOSPACE
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            setBackgroundColor(0x88000000)
+            setBackgroundColor(Color.argb(0x88, 0x00, 0x00, 0x00))
             val pad = dp(8)
             setPadding(pad, pad, pad, pad)
         }
