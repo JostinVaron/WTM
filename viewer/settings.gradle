@@ -1,1 +1,2 @@
-include ':viewer'
+rootProject.name = "wtm-viewer"
+include ':app'
