@@ -22,14 +22,14 @@ import kotlin.concurrent.thread
  * Mismo protocolo que el cliente web (server.py / hevc.py):
  * login /api/auth con token viewer -> cookie; handshake con cookie y Origin
  * identico al Host (byte a byte, con puerto); frames binarios con prefijo
- * de 13 bytes (u8 flags | u64 ts | u32 enc) antes del AVCC/hvcC AU.
+ * de 13 bytes (u8 flags | u64 ts | u32 enc) antes del AU length-prefixed.
  *
- * diag3: telemetria de dos canales. Cada evento clave va a la consola en
- * pantalla (onStatus) Y al POST /log del relay (log_handler imprime
- * "[client] ..." en la consola del S25) — evidencia del lado cliente sin
- * adb. Se registran contadores texto/binario, el hex del primer frame y
- * los close codes del server: el 4000 "replaced" del single-session antes
- * se tragaba en silencio y congelaba el overlay sin decir nada.
+ * diag6: pts viaja en MICROSEGUNDOS (MediaCodec espera us; antes se divia
+ * a ms por un comentario equivocado), y hay un resumen de contadores cada
+ * 5 s invariante — antes solo se logueaba en %600 y un stream escaso
+ * (pantalla estatica) dejaba la consola muda.
+ *
+ * Telemetria de dos canales: consola en pantalla + POST /log del relay.
  */
 class WsClient(
     private val baseUrl: String,
@@ -198,8 +198,8 @@ class WsClient(
 
     /**
      * POST /log del relay — log_handler imprime "[client] <texto>" en la
-     * consola del S25. Fire-and-forget: si falla (p.ej. 403), la consola en
-     * pantalla sigue siendo el canal primario.
+     * consola del S25. Fire-and-forget: si falla, la consola en pantalla
+     * sigue siendo el canal primario.
      */
     private fun relayLog(text: String) {
         if (sessionCookie.isEmpty()) return
@@ -229,8 +229,14 @@ class WsClient(
         val dis = DataInputStream(socket!!.inputStream)
         var textMsgs = 0L
         var binMsgs = 0L
+        var lastSummary = System.currentTimeMillis()
 
         while (!closed.get()) {
+            if (System.currentTimeMillis() - lastSummary >= 5000) {
+                onStatus("ws resumen: texto=$textMsgs binario=$binMsgs")
+                relayLog("viewer ws resumen: text=$textMsgs bin=$binMsgs")
+                lastSummary = System.currentTimeMillis()
+            }
             val b0 = dis.readUnsignedByte()
             val opcode = b0 and 0x0F
             val b1 = dis.readUnsignedByte()
@@ -276,20 +282,13 @@ class WsClient(
                         onStatus("PRIMER BINARIO: ${payload.size}B flags=0x" +
                             String.format("%02x", payload[0]) + " head=" + headHex)
                         relayLog("viewer primer binario: ${payload.size}B head=$headHex")
-                    } else if (binMsgs % 600 == 0L) {
-                        onStatus("ws: texto=$textMsgs binario=$binMsgs")
-                        relayLog("viewer ws: text=$textMsgs bin=$binMsgs")
                     }
                     if (payload.size <= 13) continue
                     val tsUs = readU64(payload, 1)
-                    onFrame(
-                        payload.copyOfRange(13, payload.size),
-                        tsUs / 1000L  // MediaCodec espera ms
-                    )
+                    // MediaCodec espera pts en MICROSEGUNDOS
+                    onFrame(payload.copyOfRange(13, payload.size), tsUs)
                 }
                 0x8 -> {
-                    // Close del server — antes silencioso. El 4000 "replaced"
-                    // del single-session es un diagnostico clave.
                     val code = if (payload.size >= 2)
                         ((payload[0].toInt() and 0xFF) shl 8) or (payload[1].toInt() and 0xFF)
                     else -1

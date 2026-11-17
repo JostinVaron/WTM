@@ -31,22 +31,22 @@ import javax.net.ssl.X509TrustManager
 /**
  * Stage 1 (issue #16): viewer nativo.
  *
- * diag5: la consola se PERSISTE linea por linea en disco (commit sincrono).
- * La evidencia ya no depende de que la app siga viva ni de los reflejos del
- * usuario: si el proceso muere en crash nativo de MediaCodec o el sistema
- * lo mata con SIGKILL (ninguno visible para el capturador Java), la ultima
- * linea escrita queda guardada. Al reabrir, la sesion anterior se muestra
- * completa y hay un boton "Compartir log" (ACTION_SEND) para mandarla por
- * WhatsApp/correo sin capturas ni consolas.
+ * diag6: el log de diag5 demostro dos cosas. (1) El stream ES HEVC
+ * (hvc1.1.60000000.H150) con framing byte-exacto: el decoder recibe un
+ * IDR valido y produce CERO frames sin error visible — hay que ver
+ * dentro del codec. (2) La app nunca murio: onPause/onStop = paso a
+ * segundo plano, y el close 4000 'replaced' lo causaba la app misma
+ * (la conexion previa nunca se cerraba al volver de background).
  *
- * Ciclo de vida logueado: si la consola termina en "app: onStop" el proceso
- * murio en segundo plano; si termina a mitad de stream sin onStop, murio en
- * caliente (crash nativo / SIGKILL) — la firma exacta de la muerte.
+ * Cambios diag6: el hvcC (csd) completo en hex queda impreso en el log
+ * para verificar que los VPS/SPS/PPS embebidos matchean el stream;
+ * surfaceCreated cierra la sesion previa antes de crear otra; el
+ * VideoDecoder pasa a modo async con todos los callbacks logueados.
  */
 class MainActivity : Activity() {
 
     companion object {
-        const val BUILD = "diag5"
+        const val BUILD = "diag6"
     }
 
     private lateinit var prefs: SharedPreferences
@@ -152,7 +152,7 @@ class MainActivity : Activity() {
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             })
             root.addView(TextView(this).apply {
-                text = lastConsole.take(4000)
+                text = lastConsole.take(6000)
                 setTextColor(Color.parseColor("#7FFF7F"))
                 typeface = Typeface.MONOSPACE
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
@@ -242,6 +242,14 @@ class MainActivity : Activity() {
         surfaceView.holder.setKeepScreenOn(true)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
+                // Cerrar la sesion previa ANTES de crear otra: el server es
+                // single-session y la conexion vieja recibia el close 4000
+                // 'replaced' (visto en el log diag5) — la app se kickeaba
+                // a si misma al volver de background.
+                wsClient?.close()
+                wsClient = null
+                decoder?.release()
+                decoder = null
                 showStatus("surface creado")
                 decoder = VideoDecoder(holder.surface) { msg -> showStatus(msg) }
                 wsClient = WsClient(
@@ -249,6 +257,9 @@ class MainActivity : Activity() {
                     viewerToken = token,
                     onConfig = { codec, width, height, csd ->
                         showStatus("config del server: codec=$codec ${width}x${height} csd=${csd.size}B")
+                        // hvcC completo en hex: permite verificar que los
+                        // VPS/SPS/PPS embebidos matchean el stream real
+                        showStatus("csd hex: " + csd.joinToString(" ") { String.format("%02x", it) })
                         decoder?.configure(codec, width, height, csd)
                     },
                     onFrame = { data, pts -> decoder?.feed(data, pts) },
@@ -267,8 +278,8 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Consola: appendea con timestamp y PERSISTE cada linea a disco (commit
-     * sincrono). Error -> no se destruye la consola; solo boton "Volver".
+     * Consola: appendea con timestamp y PERSISTE cada linea a disco.
+     * Error -> no se destruye la consola; solo boton "Volver".
      */
     private fun showStatus(msg: String) {
         val secs = (System.currentTimeMillis() - t0) / 1000
@@ -318,9 +329,6 @@ class MainActivity : Activity() {
         )
     }
 
-    // Ciclo de vida logueado: distingue muerte en caliente (crash nativo /
-    // SIGKILL: consola termina sin onStop) de muerte en background (consola
-    // termina con app: onStop).
     override fun onPause() { showStatus("app: onPause"); super.onPause() }
     override fun onStop() { showStatus("app: onStop"); super.onStop() }
     override fun onDestroy() { showStatus("app: onDestroy"); super.onDestroy() }
