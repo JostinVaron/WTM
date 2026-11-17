@@ -31,22 +31,18 @@ import javax.net.ssl.X509TrustManager
 /**
  * Stage 1 (issue #16): viewer nativo.
  *
- * diag6: el log de diag5 demostro dos cosas. (1) El stream ES HEVC
- * (hvc1.1.60000000.H150) con framing byte-exacto: el decoder recibe un
- * IDR valido y produce CERO frames sin error visible — hay que ver
- * dentro del codec. (2) La app nunca murio: onPause/onStop = paso a
- * segundo plano, y el close 4000 'replaced' lo causaba la app misma
- * (la conexion previa nunca se cerraba al volver de background).
- *
- * Cambios diag6: el hvcC (csd) completo en hex queda impreso en el log
- * para verificar que los VPS/SPS/PPS embebidos matchean el stream;
- * surfaceCreated cierra la sesion previa antes de crear otra; el
- * VideoDecoder pasa a modo async con todos los callbacks logueados.
+ * diag7: el log diag6 demostro que hvcC, IDR y transporte son validos
+ * (aritmetica de bytes: 23B cabecera + VPS 23 + SPS 40 + PPS 10 = 111B
+ * exactos) y que el decoder por defecto consume 95 AUs y suelta 0 frames
+ * SIN error. El fallo es del decoder elegido por la tablet, no del
+ * protocolo. Los cambios de motor viven en VideoDecoder.kt (pts 0-based,
+ * csd via input, params in-band, auto-rotacion de decoders); aqui solo
+ * cambia el numero de build.
  */
 class MainActivity : Activity() {
 
     companion object {
-        const val BUILD = "diag6"
+        const val BUILD = "diag7"
     }
 
     private lateinit var prefs: SharedPreferences
