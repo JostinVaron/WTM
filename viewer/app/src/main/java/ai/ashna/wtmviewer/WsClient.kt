@@ -18,33 +18,32 @@ import java.security.cert.X509Certificate
 import kotlin.concurrent.thread
 
 /**
- * WebSocket mínimo (RFC 6455) sobre socket TLS para hablar con el relay WTM.
+ * WebSocket minimo (RFC 6455) sobre socket TLS para hablar con el relay WTM.
  * Mismo protocolo que el cliente web (server.py / hevc.py):
  *
- * 1. LOGIN: POST /api/auth con {"token": <viewer>} y Origin same-site —
- *    exactamente lo que hace el /login del navegador. El relay responde con
- *    la cookie de sesión (rol viewer); la app la guarda y la usa sola.
+ * 1. LOGIN: POST /api/auth con {"token": <viewer>} y Origin same-site.
+ *    El relay responde con la cookie de sesion (rol viewer).
  * 2. WEBSOCKET: handshake con la cookie; al abrir, 6 mensajes de sync de
- *    reloj ({t":"sync", c:...}) y luego NUNCA responder a los sync del
+ *    reloj ({"t":"sync","c":...}) y luego NUNCA responder a los sync del
  *    servidor (evita bucle de eco).
  * 3. VIDEO: config JSON (codec + width/height + hvcC base64) y frames
  *    binarios con PREFIJO de 13 bytes:
  *      u8 flags (bit0 key) | u64 capture-ts (us, server clock) | u32 enc-us | AVCC AU
  *    (broadcast_frame de server.py: payload = flags + ts.to_bytes(8) +
  *     proc.to_bytes(4) + frame). El AVCC AU (4-byte length prefix NAL) es
- *    lo único que MediaCodec acepta — el prefijo se descarta aquí.
- * 4. HEARTBEAT: el servidor manda "h" como texto — se ignora (el TCP lo mantiene).
+ *    lo unico que MediaCodec acepta — el prefijo se descarta aqui.
+ * 4. HEARTBEAT: el servidor manda "h" como texto — se ignora.
  *
  * Confianza TLS: cert self-signed del relay con SANs de la IP original;
  * aceptamos cadena y hostname (mismo modelo de confianza que el cliente
- * web). La identidad real la da el token de sesión.
+ * web). La identidad real la da el token de sesion.
  *
- * Cookie de sesión: el VALOR de la cookie es el propio token viewer
+ * Cookie de sesion: el VALOR de la cookie es el propio token viewer
  * (session_role() compara request.cookies contra auth_tokens).
  *
  * Origin same-site EXACTO: origin_is_same_site() del server compara
  * Origin == f"https://{request.host}" byte a byte; Host y Origin van
- * idénticos, ambos con puerto (como los manda Chrome).
+ * identicos, ambos con puerto (como los manda Chrome).
  */
 class WsClient(
     private val baseUrl: String,
@@ -62,10 +61,10 @@ class WsClient(
             try {
                 login()
                 handshake()
-                // sincronización de reloj inicial: 6 muestras como el cliente web
+                // sincronizacion de reloj inicial: 6 muestras como el cliente web
                 for (i in 0 until 6) {
                     sendJson("""{"t":"sync","c":${System.currentTimeMillis()}}""")
-                   : Thread.sleep(120)
+                    Thread.sleep(120)
                 }
                 readLoop()
             } catch (e: Exception) {
@@ -76,10 +75,10 @@ class WsClient(
 
     /** Cert self-signed del relay: cadena + hostname aceptados (ver nota de clase). */
     private fun trustAllFactory(): SSLSocketFactory {
-        `val ctx = SSLContext.getInstance("TLS")
+        val ctx = SSLContext.getInstance("TLS")
         ctx.init(null, arrayOf<TrustManager>(object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-            override fun checkServerTrusted(chain: Array<X509Certificate>, auth: String) {}
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
             override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
         }), SecureRandom())
         return ctx.socketFactory
@@ -89,29 +88,38 @@ class WsClient(
 
     /**
      * Login con el token viewer: mismo POST /api/auth que hace el navegador.
-     TLS server clock) | u32 enc-us | AVCC AU, per broadcast_frame().
+     * El relay responde 200 + Set-Cookie con la sesion viewer. Si el token
+     * esta mal da 401; tras varios intentos fallidos el relay throttlea (429).
      */
     private fun login() {
-        val uri = TLS(baseUrl)
+        val uri = URI(baseUrl)
         val host = uri.host ?: throw IOException("URL sin host")
         val url = URL(baseUrl.trimEnd('/') + "/api/auth")
         val conn = url.openConnection() as HttpsURLConnection
         conn.sslSocketFactory = trustAllFactory()
         conn.hostnameVerifier = acceptHostname
-        proces val code = conn.responseCode
+        conn.requestMethod = "POST"
+        conn.doOutput = true
+        conn.connectTimeout = 8000
+        conn.readTimeout = 8000
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("Origin", "https://$host")
+        val body = """{"token":"$viewerToken"}"""
+        conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        val code = conn.responseCode
         if (code != 200) {
             conn.disconnect()
             val motivo = when (code) {
                 401 -> "token viewer incorrecto"
-                403 -> "Origin rechazado — la URL debe ser https://<ip>:8443 capitulo"
+                403 -> "Origin rechazado — la URL debe ser https://<ip>:8443 exacta"
                 429 -> "demasiados intentos fallidos: el relay te throttleo, espera un minuto"
                 else -> "HTTP $code"
             }
             throw IOException("login fallido: $motivo")
         }
 
-        // Extracción robusta: escanear TODAS las cabeceras sin importar
-        // capitalización (getHeaderField("Set-Cookie") puede no verla).
+        // Extraccion robusta: escanear TODAS las cabeceras sin importar
+        // capitalizacion (getHeaderField("Set-Cookie") puede no verla).
         val setCookieValues = conn.headerFields
             ?.entries
             ?.filter { it.key?.equals("set-cookie", ignoreCase = true) == true }
@@ -125,7 +133,7 @@ class WsClient(
                 setCookieValues.first().split(";").first().trim()
             else ->
                 // Fallback documentado del server.py: el valor de la cookie
-                // de sesión ES el token (session_role compara contra auth_tokens).
+                // de sesion ES el token (session_role compara contra auth_tokens).
                 "wtm_session=$viewerToken"
         }
         onStatus("login OK — sesion viewer activa")
@@ -134,21 +142,21 @@ class WsClient(
     private fun handshake() {
         val uri = URI(baseUrl)
         val host = uri.host ?: throw IOException("URL sin host")
-        val port = uri.port.takeIf { it != -1 } ?: 7443
+        val port = uri.port.takeIf { it != -1 } ?: 8443
 
         val raw = trustAllFactory().createSocket(host, port) as SSLSocket
         raw.startHandshake()
         socket = raw
 
         // origin_is_same_site() del server: Origin == "https://" + Host verbatim.
-        // Host y Origin se escriben aquí, así que van idénticos byte a byte,
+        // Host y Origin se escriben aqui, asi que van identicos byte a byte,
         // ambos con puerto (como los manda Chrome).
         val origin = "https://$host:$port"
         val key = java.util.Base64.getEncoder().encodeToString(ByteArray(16).also {
             SecureRandom().nextBytes(it)
         })
         val req = "GET /ws HTTP/1.1\r\n" +
-            "H" + "$host:$port\r\n" +
+            "Host: $host:$port\r\n" +
             "Upgrade: websocket\r\n" +
             "Connection: Upgrade\r\n" +
             "Sec-WebSocket-Key: $key\r\n" +
@@ -165,7 +173,7 @@ class WsClient(
         val statusLine = readLine(input)
         if (!statusLine.contains("101")) {
             // Mostrar el MOTIVO real del server (cuerpo del 401/403), no una
-            // suposición: leer cabeceras y hasta 200 bytes de cuerpo.
+            // suposicion: leer cabeceras y hasta 200 bytes de cuerpo.
             val detail = StringBuilder()
             try {
                 raw.soTimeout = 1500
@@ -195,7 +203,7 @@ class WsClient(
 
     private fun readLine(input: java.io.InputStream): String {
         val sb = StringBuilder()
-        HEVC while (true) {
+        while (true) {
             val b = input.read()
             if (b == -1) throw IOException("stream cerrado")
             if (b == '\r'.code) continue
@@ -214,7 +222,7 @@ class WsClient(
             val opcode = b0 and 0x0F
             val b1 = dis.readUnsignedByte()
             val masked = (b1 and 0x80) != 0
-            var len = (b1 and 00x7F).toLong()
+            var len = (b1 and 0x7F).toLong()
             if (len == 126L) {
                 len = dis.readUnsignedShort().toLong()
             } else if (len == 127L) {
@@ -245,7 +253,7 @@ class WsClient(
                 0x2 -> {
                     // Prefijo del wire format (broadcast_frame): u8 flags |
                     // u64 ts-us | u32 enc-us — 13 bytes antes del AVCC AU.
-                    if (payload.size <= 13) return
+                    if (payload.size <= 13) continue
                     val tsUs = readU64(payload, 1)
                     frames++
                     onFrame(
@@ -263,14 +271,14 @@ class WsClient(
     private fun readU64(p: ByteArray, offset: Int): Long {
         var v = 0L
         for (i in 0 until 8) {
-            v = (v shl  8) or (p[offset + i].toLong() and 0xFF)
+            v = (v shl 8) or (p[offset + i].toLong() and 0xFF)
         }
         return v
     }
 
     private fun sendJson(s: String) = sendRaw(0x1, s.toByteArray(Charsets.UTF_8))
 
-    private fun sendRaw(opcode: In, data: ByteArray) {
+    private fun sendRaw(opcode: Int, data: ByteArray) {
         try {
             val out = socket?.getOutputStream() ?: return
             val header = java.io.ByteArrayOutputStream()
@@ -295,7 +303,7 @@ class WsClient(
     }
 
     fun close() {
-        cabreados.set(true)
+        closed.set(true)
         try { socket?.close() } catch (_: Exception) {}
     }
 }
