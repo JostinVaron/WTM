@@ -1,6 +1,7 @@
 package ai.ashna.wtmviewer
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
@@ -30,22 +31,22 @@ import javax.net.ssl.X509TrustManager
 /**
  * Stage 1 (issue #16): viewer nativo.
  *
- * diag4: la consola es evidencia, no se destruye. En diag3, cualquier
- * mensaje "error:" reconstrulia la UI de config EN EL MISMO INSTANTE —
- * la consola con el diagnostico desaparecia en un flash justo cuando iba
- * a mostrar el problema ("trata de iniciarse, glitch, desaparece").
- * Ahora: el error queda impreso como ultima linea de la consola y aparece
- * un boton "Volver"; la consola sobrevive.
+ * diag5: la consola se PERSISTE linea por linea en disco (commit sincrono).
+ * La evidencia ya no depende de que la app siga viva ni de los reflejos del
+ * usuario: si el proceso muere en crash nativo de MediaCodec o el sistema
+ * lo mata con SIGKILL (ninguno visible para el capturador Java), la ultima
+ * linea escrita queda guardada. Al reabrir, la sesion anterior se muestra
+ * completa y hay un boton "Compartir log" (ACTION_SEND) para mandarla por
+ * WhatsApp/correo sin capturas ni consolas.
  *
- * Ademas: capturador global de crashes. Un crash de la app antes era
- * invisible (la app simplemente se cerraba). Ahora el stack trace se
- * persiste en prefs, se reporta al POST /log del relay y se muestra al
- * reabrir la app. Nada muere en silencio.
+ * Ciclo de vida logueado: si la consola termina en "app: onStop" el proceso
+ * murio en segundo plano; si termina a mitad de stream sin onStop, murio en
+ * caliente (crash nativo / SIGKILL) — la firma exacta de la muerte.
  */
 class MainActivity : Activity() {
 
     companion object {
-        const val BUILD = "diag4"
+        const val BUILD = "diag5"
     }
 
     private lateinit var prefs: SharedPreferences
@@ -69,10 +70,15 @@ class MainActivity : Activity() {
         buildConfigUI("")
     }
 
-    /**
-     * Crash -> prefs (sincrono, rapido) + reporte best-effort al /log del
-     * relay con la cookie documentada (wtm_session=token).
-     */
+    /** Consola -> disco, sincrono: sobrevive a SIGKILL y crashes nativos. */
+    private fun persistLog() {
+        try {
+            synchronized(logBuf) {
+                prefs.edit().putString("last_console", logBuf.toString()).commit()
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun persistCrash(t: Thread, e: Throwable) {
         val text = "CRASH ${t.name}: $e\n" + e.stackTraceToString().take(3000)
         try { prefs.edit().putString("last_crash", text).commit() } catch (_: Exception) {}
@@ -126,15 +132,43 @@ class MainActivity : Activity() {
         }
         val connectBtn = Button(this).apply { text = "Conectar" }
 
-        // crash capturado en la sesion anterior: mostrarlo y limpiarlo
+        // crash capturado en la sesion anterior
         val lastCrash = prefs.getString("last_crash", null)
         if (lastCrash != null) {
             root.addView(TextView(this).apply {
-                text = "ULTIMO CRASH:\n${lastCrash.take(1500)}"
+                text = "ULTIMO CRASH:\n${lastCrash.take(1200)}"
                 setTextColor(Color.parseColor("#FF6A6A"))
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             })
             prefs.edit().remove("last_crash").apply()
+        }
+
+        // consola PERSISTIDA de la sesion anterior — sobrevive a cualquier muerte
+        val lastConsole = prefs.getString("last_console", null)
+        if (!lastConsole.isNullOrEmpty()) {
+            root.addView(TextView(this).apply {
+                text = "ULTIMA SESION (persistida):"
+                setTextColor(Color.parseColor("#7FFF7F"))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            })
+            root.addView(TextView(this).apply {
+                text = lastConsole.take(4000)
+                setTextColor(Color.parseColor("#7FFF7F"))
+                typeface = Typeface.MONOSPACE
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+                maxLines = 14
+                movementMethod = ScrollingMovementMethod()
+            })
+            val shareBtn = Button(this).apply { text = "Compartir log" }
+            shareBtn.setOnClickListener {
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT,
+                        "WTM viewer $BUILD — log de la ultima sesion:\n\n$lastConsole")
+                }
+                startActivity(Intent.createChooser(send, "Compartir log"))
+            }
+            root.addView(shareBtn)
         }
 
         connectBtn.setOnClickListener {
@@ -163,7 +197,10 @@ class MainActivity : Activity() {
     }
 
     private fun startStream(url: String, token: String) {
-        synchronized(logBuf) { logBuf.setLength(0) }
+        synchronized(logBuf) {
+            logBuf.setLength(0)  // sesion nueva: la persistida previa ya se mostro
+        }
+        persistLog()
         backBtn = null
 
         val surfaceView = SurfaceView(this)
@@ -205,6 +242,7 @@ class MainActivity : Activity() {
         surfaceView.holder.setKeepScreenOn(true)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
+                showStatus("surface creado")
                 decoder = VideoDecoder(holder.surface) { msg -> showStatus(msg) }
                 wsClient = WsClient(
                     baseUrl = url,
@@ -221,6 +259,7 @@ class MainActivity : Activity() {
 
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
             override fun surfaceDestroyed(holder: SurfaceHolder) {
+                showStatus("surface destruido")
                 decoder?.release()
                 decoder = null
             }
@@ -228,8 +267,8 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Consola: appendea con timestamp. Error -> NO se destruye la consola
-     * (la evidencia queda en pantalla); solo aparece un boton "Volver".
+     * Consola: appendea con timestamp y PERSISTE cada linea a disco (commit
+     * sincrono). Error -> no se destruye la consola; solo boton "Volver".
      */
     private fun showStatus(msg: String) {
         val secs = (System.currentTimeMillis() - t0) / 1000
@@ -245,6 +284,7 @@ class MainActivity : Activity() {
             }
             text = logBuf.toString()
         }
+        persistLog()
         runOnUiThread {
             overlay?.let { tv ->
                 tv.text = text
@@ -278,12 +318,13 @@ class MainActivity : Activity() {
         )
     }
 
+    // Ciclo de vida logueado: distingue muerte en caliente (crash nativo /
+    // SIGKILL: consola termina sin onStop) de muerte en background (consola
+    // termina con app: onStop).
+    override fun onPause() { showStatus("app: onPause"); super.onPause() }
+    override fun onStop() { showStatus("app: onStop"); super.onStop() }
+    override fun onDestroy() { showStatus("app: onDestroy"); super.onDestroy() }
+
     private fun dp(v: Int): Int =
         (resources.displayMetrics.density * v).toInt()
-
-    override fun onDestroy() {
-        wsClient?.close()
-        decoder?.release()
-        super.onDestroy()
-    }
 }
