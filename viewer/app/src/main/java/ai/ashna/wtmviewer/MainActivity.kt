@@ -19,7 +19,7 @@ import android.content.SharedPreferences
  * - La app hace el login sola (POST /api/auth) y guarda la sesion
  * - SurfaceView a pantalla completa cuando conecta
  *
- * Nota de política del proyecto (PrivateIpSweepTest): ningún default con IP
+ * Nota de politica del proyecto (PrivateIpSweepTest): ningun default con IP
  * RFC 1918 real puede vivir en el repo. El operador escribe su IP al configurar.
  */
 class MainActivity : Activity() {
@@ -88,7 +88,7 @@ class MainActivity : Activity() {
                     baseUrl = url,
                     viewerToken = token,
                     onConfig = { codec, width, height, csd ->
-                        decoder?.configure(codec, width, height, gh_csd_placeholder)
+                        decoder?.configure(codec, width, height, csd)
                         runOnUiThread { status.text = "Estado: decodificando ${width}x${height}" }
                     },
                     onFrame = { data, pts ->
