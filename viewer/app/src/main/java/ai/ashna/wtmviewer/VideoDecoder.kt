@@ -34,7 +34,7 @@ class VideoDecoder(
 ) {
     companion object {
         private const val SILENCE_TICKS = 3
-        private const val KEY_NALS = setOf(19, 20, 21)
+        private val KEY_NALS = setOf(19, 20, 21)   // NO const: setOf no es constante de compilacion
         private val START_CODE = byteArrayOf(0, 0, 0, 1)
         private const val DROP_LAG_US = 120_000L   // seguridad inerte (pts sintetico); la cota real es QUEUE_MAX
         private const val QUEUE_MAX = 8            // ~133 ms a 60 fps: cota dura de video en vuelo
