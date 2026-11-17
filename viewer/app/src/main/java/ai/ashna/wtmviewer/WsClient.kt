@@ -21,18 +21,16 @@ import kotlin.concurrent.thread
  * WebSocket minimo (RFC 6455) sobre socket TLS para hablar con el relay WTM.
  * Mismo protocolo que el cliente web (server.py / hevc.py).
  *
- * v1.1-perf1 — dos piezas de latencia portadas del cliente web (que ya
- * funcionaban ahi y faltaban en la app):
+ * v1.1-perf1 — dos piezas de latencia portadas del cliente web:
  *
  *  1. HEARTBEAT WiFi (25 ms): ping bidireccional tiny para que la radio
  *     del receptor NO entre en power-save — que agrupa paquetes por
- *     beacon (~100 ms) y añade latencia en ráfagas. El cliente web lo
- *     hace (HB=25 por defecto) desde siempre; la app no lo hacia.
- *  2. SYNC de reloj NTP-style: offset = s - (c + rtt/2) con las muestras
- *     {"t":"sync"} que el server ya responde. Con el offset calculado,
- *     cada frame lleva su ts de captura en el prefijo -> latencia
- *     captura->llegada MEDIBLE por frame. Esto convierte "0 ms" de
- *     aspiracion en un numero real en pantalla.
+ *     beacon (~100 ms) y añade latencia en rafagas. El cliente web lo
+ *     hace desde siempre; la app no lo hacia.
+ *  2. SYNC de reloj NTP-style: el server responde {"type":"sync","s":server_ms,"c":eco}
+ *     — s = hora del server EN EL MOMENTO de responder. Con rtt = ahora-c
+ *     y offset = s - (c + rtt/2), cada frame lleva su ts de captura en el
+ *     prefijo -> latencia captura->llegada MEDIBLE por frame.
  */
 class WsClient(
     private val baseUrl: String,
@@ -51,7 +49,7 @@ class WsClient(
 
     // --- reloj/latencia (v1.1-perf1) ---
     @Volatile private var offsetMs = 0.0
-    @Volatile private var bestRtt = Long.MAX_VALUE
+    @Volatile private var bestRtt = -1.0       // ms; -1 = sin muestra aun
     private val recentLat = ArrayDeque<Double>()
 
     /** Media de latencia captura->llegada de los ultimos ~40 frames (ms). */
@@ -59,7 +57,8 @@ class WsClient(
         if (recentLat.isEmpty()) 0.0 else recentLat.reduce { a, b -> a + b } / recentLat.size
     }
 
-    fun rttMs(): Long = if (bestRtt == Long.MAX_VALUE) -1 else bestRtt
+    /** Mejor RTT observado (ms); -1 = sin muestra todavia. */
+    fun rttMs(): Double = bestRtt
 
     fun connect() {
         thread(name = "wtm-ws") {
@@ -82,7 +81,7 @@ class WsClient(
 
     /**
      * Heartbeat + sync periodico: mantiene la radio WiFi despierta (25 ms)
-     * y recalibra el offset de reloj cada segundo, como el cliente web.
+     * y recalibra el offset de reloj cada ~1 s, como el cliente web.
      */
     private fun startHeartbeat() {
         thread(name = "wtm-hb", isDaemon = true) {
@@ -168,7 +167,7 @@ class WsClient(
         val raw = trustAllFactory().createSocket(host, port) as SSLSocket
         raw.startHandshake()
         socket = raw
-        raw.tcpNoDelay = true   // Nagle off: latencia sobre throughput, como el server espera
+        raw.tcpNoDelay = true   // Nagle off: latencia sobre throughput
 
         val origin = "https://$host:$port"
         val key = java.util.Base64.getEncoder().encodeToString(ByteArray(16).also {
@@ -260,14 +259,16 @@ class WsClient(
                             onConfig(m.getString("codec"), m.getInt("width"), m.getInt("height"), csd)
                         }
                         "sync" -> {
-                            // NTP-style: rtt = ahora - c; offset = s - (c + rtt/2)
+                            // Server: {"type":"sync","s":server_ms,"c":echo}.
+                            // rtt = ahora - c ; offset = s - (c + rtt/2).
                             val now = System.currentTimeMillis()
-                            val c = m!!.optDouble("c", 0.0)
-                            val s = m.optDouble("s", 0.0)
+                            val c = m!!.optDouble("c", -1.0)
+                            val s = m.optDouble("s", -1.0)
                             if (c > 0 && s > 0) {
                                 val rtt = now - c
-                                if (rtt in 0..10000 && rtt <= bestRtt + 2) {
-                                    bestRtt = Math.min(bestRtt, rtt)
+                                if (rtt in 0.0..10000.0 &&
+                                    (bestRtt < 0 || rtt <= bestRtt + 2.0)) {
+                                    if (bestRtt < 0 || rtt < bestRtt) bestRtt = rtt
                                     offsetMs = s - (c + rtt / 2.0)
                                 }
                             }

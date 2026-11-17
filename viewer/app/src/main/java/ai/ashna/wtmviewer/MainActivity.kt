@@ -42,9 +42,9 @@ import javax.net.ssl.X509TrustManager
  *    por frame).
  *  - Render-drop policy en VideoDecoder (latest-wins bajo atasco).
  *
- * El HUD es provisional hasta v1.3 (overlay de dos dedos); por ahora un
- * tap lo alterna — no interfiere porque el táctil de control todavia no
- * esta implementado (llega en v1.2).
+ * El HUD es provisional hasta v1.2 (táctil) / v1.3 (overlay 2 dedos);
+ * por ahora un tap lo alterna — no interfiere porque el táctil de
+ * control todavia no esta implementado.
  */
 class MainActivity : Activity() {
 
@@ -247,7 +247,7 @@ class MainActivity : Activity() {
         setContentView(frame)
         showStatus("viewer v$BUILD — conectando a $url")
 
-        // Tap sobre el video alterna el HUD (hasta v1.3 = overlay 2 dedos).
+        // Tap sobre el video alterna el HUD (hasta v1.2 tactil / v1.3 overlay 2 dedos).
         surfaceView.setOnTouchListener { _, ev ->
             if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
                 hudVisible = !hudVisible
@@ -313,9 +313,9 @@ class MainActivity : Activity() {
                 lastRendered = d.rendered
                 lastRenderedAt = now
                 val lat = ws?.latencyAvg() ?: 0.0
-                val rtt = ws?.rttMs() ?: -1
+                val rtt = ws?.rttMs() ?: -1.0
                 val txt = String.format(
-                    "%.0f fps  lat %.1f ms  rtt %d ms\n%s\nrender %d  rdrop %d  cola %d",
+                    "%.0f fps  lat %.1f ms  rtt %.0f ms\n%s\nrender %d  rdrop %d  cola %d",
                     fps, lat, rtt, d.decoder, d.rendered, d.renderDrops, d.queueDepth
                 )
                 runOnUiThread { hud?.text = txt }
