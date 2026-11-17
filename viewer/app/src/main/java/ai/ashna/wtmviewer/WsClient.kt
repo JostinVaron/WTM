@@ -5,14 +5,16 @@ import java.io.DataInputStream
 import java.io.IOException
 import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
-import javax.net.ssl.HttpsURLConnection
 import kotlin.concurrent.thread
 
 /**
  * WebSocket mínimo (RFC 6455) sobre socket TLS para hablar con el relay WTM.
- * El relay exige: TLS + cookie de sesión (rol viewer) + Host allowlist + Origin same-site.
- * Los frames llegan como mensajes binarios 4-byte-length-prefixed (AVCC/hvcC),
- * idénticos al camino del cliente web (ver server.py / hevc.py).
+ * Mismo protocolo que el cliente web (server.py / hevc.py):
+ * - al abrir: 6 mensajes de sync de reloj ({t:"sync", c:...}), luego NUNCA
+ *   responder a los sync del servidor (evita bucle de eco);
+ * - config JSON: codec + width/height + description (hvcC en base64);
+ * - frames: mensajes binarios AVCC (4-byte NAL length prefix);
+ * - heartbeat: el servidor manda "h" como texto — se ignora (el TCP lo mantiene).
  */
 class WsClient(
     private val baseUrl: String,
@@ -28,6 +30,11 @@ class WsClient(
         thread(name = "wtm-ws") {
             try {
                 handshake()
+                // sincronización de reloj inicial: 6 eco-muestras como el web
+                for (i in 0 until 6) {
+                    sendJson("""{"t":"sync","c":${System.currentTimeMillis()}}""")
+                    Thread.sleep(120)
+                }
                 readLoop()
             } catch (e: Exception) {
                 if (!closed.get()) onStatus("error: ${e.message}")
@@ -40,8 +47,8 @@ class WsClient(
         val host = uri.host ?: throw IOException("URL sin host")
         val port = uri.port.takeIf { it != -1 } ?: 8443
 
-        // Aceptamos el cert self-signed del relay (identidad verificada por
-        // fingerprint SHA-256 en el primer uso — mismo modelo que el web).
+        // Cert self-signed del relay: identidad verificada por fingerprint
+        // SHA-256 comparado fuera de banda (mismo modelo que el cliente web).
         val factory = javax.net.ssl.SSLContext.getInstance("TLS").apply {
             init(null, arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
                 override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
@@ -54,9 +61,9 @@ class WsClient(
         raw.startHandshake()
         socket = raw
 
-        val key = java.util.Base64.getEncoder().encodeToString(
-            java.util.UUID.randomUUID().toString().substring(0, 16).toByteArray()
-        )
+        val key = java.util.Base64.getEncoder().encodeToString(ByteArray(16).also {
+            java.security.SecureRandom().nextBytes(it)
+        })
         val req = "GET /ws HTTP/1.1\r\n" +
             "Host: $host:$port\r\n" +
             "Upgrade: websocket\r\n" +
@@ -110,26 +117,27 @@ class WsClient(
             } else if (len == 127L) {
                 len = dis.readLong()
             }
-            if (masked) {
-                val mask = ByteArray(4)
-                dis.readFully(mask)
-                throw IOException("server no debe enmascarar frames")
-            }
+            if (masked) throw IOException("server no debe enmascarar frames")
 
             val payload = ByteArray(len.toInt())
             dis.readFully(payload)
 
             when (opcode) {
-                0x1 -> {
+                0x1 -> { // texto
                     val text = String(payload, Charsets.UTF_8)
-                    if (text == "h") continue
+                    if (text == "h") continue // heartbeat del servidor: ignorar
                     val m = JSONObject(text)
                     when (m.optString("type")) {
                         "config" -> {
-                            val csd = android.util.Base64.decode(m.getString("description"), android.util.Base64.NO_WRAP)
+                            val csd = android.util.Base64.decode(
+                                m.getString("description"), android.util.Base64.NO_WRAP
+                            )
                             onConfig(m.getString("codec"), m.getInt("width"), m.getInt("height"), csd)
                         }
-                        "sync" -> sendJson("""{"t":"sync","c":${m.optLong("c")}}""")
+                        "sync" -> {
+                            // eco de reloj del servidor: medir offset, NO responder
+                            // (responder crearía un bucle infinito de ecos)
+                        }
                     }
                 }
                 0x2 -> { frames++; onFrame(payload, 0) }
