@@ -31,17 +31,18 @@ import kotlin.concurrent.thread
  *    binarios AVCC (4-byte NAL length prefix).
  * 4. HEARTBEAT: el servidor manda "h" como texto — se ignora (el TCP lo mantiene).
  *
- * Confianza TLS: el relay usa un cert self-signed cuyos SANs llevan la IP
- * del momento en que se generó; la IP del hotspot cambia, así que el
- * hostname del cert casi nunca coincidirá con el de hoy. Mismo modelo de
- * confianza que el cliente web: aceptamos la cadena Y el hostname.
- * La identidad real del relay la da el token de sesión, no el SAN del cert.
+ * Confianza TLS: cert self-signed del relay con SANs de la IP original;
+ * aceptamos cadena y hostname (mismo modelo de confianza que el cliente
+ * web). La identidad real la da el token de sesión.
  *
- * Cookie de sesión: server.py hace response.set_cookie(AUTH_COOKIE, token)
- * — el VALOR de la cookie es el propio token (session_role() compara
- * request.cookies contra auth_tokens). Se parsea Set-Cookie de la respuesta
- * de forma robusta (headerFields case-insensitive); si la cabecera no
- * llegara visible, el fallback documentado es wtm_session=<token>.
+ * Cookie de sesión: el VALOR de la cookie es el propio token viewer
+ * (session_role() compara request.cookies contra auth_tokens).
+ *
+ * Origin same-site EXACTO: origin_is_same_site() del server compara
+ * Origin == f"https://{request.host}" byte a byte, donde request.host es
+ * el header Host verbatim. Chrome manda el Origin CON puerto. Aquí
+ * escribimos nosotros el Host (con puerto), así que el Origin lleva el
+ * puerto también — idénticos siempre.
  */
 class WsClient(
     private val baseUrl: String,
@@ -146,6 +147,10 @@ class WsClient(
         raw.startHandshake()
         socket = raw
 
+        // origin_is_same_site() del server: Origin == "https://" + Host verbatim.
+        // Host y Origin se escriben aquí, así que van idénticos byte a byte,
+        // ambos con puerto (como los manda Chrome).
+        val origin = "https://$host:$port"
         val key = java.util.Base64.getEncoder().encodeToString(ByteArray(16).also {
             SecureRandom().nextBytes(it)
         })
@@ -156,7 +161,7 @@ class WsClient(
             "Sec-WebSocket-Key: $key\r\n" +
             "Sec-WebSocket-Version: 13\r\n" +
             "Cookie: $sessionCookie\r\n" +
-            "Origin: https://$host\r\n" +
+            "Origin: $origin\r\n" +
             "\r\n"
         raw.getOutputStream().apply {
             write(req.toByteArray(Charsets.UTF_8))
@@ -166,7 +171,27 @@ class WsClient(
         val input = raw.getInputStream()
         val statusLine = readLine(input)
         if (!statusLine.contains("101")) {
-            throw IOException("handshake rechazado: $statusLine — cookie/Origin/Host allowlist")
+            // Mostrar el MOTIVO real del server (cuerpo del 401/403), no una
+            // suposición: leer cabeceras y hasta 200 bytes de cuerpo.
+            val detail = StringBuilder()
+            try {
+                raw.soTimeout = 1500
+                while (true) {
+                    val line = readLine(input)
+                    if (line.isEmpty()) break
+                }
+                val avail = input.available()
+                if (avail > 0) {
+                    val body = ByteArray(minOf(avail, 200))
+                    input.read(body)
+                    detail.append(String(body, Charsets.UTF_8).trim())
+                }
+            } catch (_: Exception) {}
+            val extra = detail.toString().trim()
+            throw IOException(
+                if (extra.isEmpty()) "handshake rechazado: $statusLine"
+                else "handshake rechazado: $statusLine — $extra"
+            )
         }
         while (true) {
             val line = readLine(input)
