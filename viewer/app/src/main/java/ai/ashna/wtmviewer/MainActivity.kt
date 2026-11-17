@@ -33,23 +33,18 @@ import javax.net.ssl.X509TrustManager
 /**
  * WTM Viewer — viewer nativo del relay (issue #16).
  *
- * v1.1-perf1 — RENDIMIENTO MEDIBLE:
- *  - HUD de perf (toca la pantalla para mostrarlo/ocultarlo): fps
- *    renderizados, latencia captura->llegada media (ms), rtt, decoder
- *    activo, render-drops y cola. Los numeros con los que se optimiza.
- *  - Heartbeat WiFi 25 ms + sync de reloj en WsClient (la radio no
- *    entra en power-save; el offset NTP-style permite medir latencia
- *    por frame).
- *  - Render-drop policy en VideoDecoder (latest-wins bajo atasco).
- *
- * El HUD es provisional hasta v1.2 (táctil) / v1.3 (overlay 2 dedos);
- * por ahora un tap lo alterna — no interfiere porque el táctil de
- * control todavia no esta implementado.
+ * v1.1-perf2 — MEDICIONES COMPLETAS EN EL LOG: v1.0 retiro el logging
+ * verboso de diagnostico (correcto para produccion) pero eso dejo el
+ * "Compartir log" con casi nada — el HUD solo vivia en pantalla y moria
+ * con la sesion. perf2 escribe una linea "hud: <fps lat rtt decoder
+ * render rdrop cola>" al log persistido cada ~1 s (persistencia en disco
+ * cada ~5 s para no meter jank de I/O en el pipeline de video). El log
+ * compartido vuelve a ser la fuente de verdad completa para optimizar.
  */
 class MainActivity : Activity() {
 
     companion object {
-        const val BUILD = "1.1-perf1"
+        const val BUILD = "1.1-perf2"
     }
 
     private lateinit var prefs: SharedPreferences
@@ -66,6 +61,7 @@ class MainActivity : Activity() {
     @Volatile private var hudRunning = false
     private var lastRendered = 0L
     private var lastRenderedAt = 0L
+    private var measurePersist = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -278,6 +274,7 @@ class MainActivity : Activity() {
                     baseUrl = url,
                     viewerToken = token,
                     onConfig = { codec, width, height, csd ->
+                        showStatus("stream: $codec ${width}x${height}")
                         decoder?.configure(codec, width, height, csd)
                     },
                     onFrame = { data, pts -> decoder?.feed(data, pts) },
@@ -291,17 +288,39 @@ class MainActivity : Activity() {
                 hudRunning = false
                 decoder?.release()
                 decoder = null
+                persistLog()   // asegurar que las ultimas mediciones lleguen a disco
             }
         })
     }
 
-    /** Refresca el HUD 2 veces/seg con los stats reales del pipeline. */
+    /**
+     * Linea de medicion -> log persistido, SIN tocar la UI ni el
+     * pipeline de video (perf2). Persistencia en disco cada 5 lineas
+     * (~5 s) para no introducir jank de I/O en el render.
+     */
+    private fun logMeasure(msg: String) {
+        val line = "[${(System.currentTimeMillis() - t0) / 1000} s] $msg"
+        synchronized(logBuf) {
+            logBuf.append(line).append('\n')
+            val lines = logBuf.toString().split('\n')
+            if (lines.size > 800) {
+                val keep = lines.takeLast(800).joinToString("\n")
+                logBuf.setLength(0)
+                logBuf.append(keep)
+            }
+        }
+        measurePersist++
+        if (measurePersist % 5 == 0) persistLog()
+    }
+
+    /** Refresca el HUD 2 veces/seg; cada ~1 s la medicion va al log. */
     private fun startHudLoop() {
         if (hudRunning) return
         hudRunning = true
         lastRendered = 0L
         lastRenderedAt = System.currentTimeMillis()
         Thread {
+            var tick = 0
             while (hudRunning) {
                 Thread.sleep(500)
                 if (!hudRunning) break
@@ -315,9 +334,11 @@ class MainActivity : Activity() {
                 val lat = ws?.latencyAvg() ?: 0.0
                 val rtt = ws?.rttMs() ?: -1.0
                 val txt = String.format(
-                    "%.0f fps  lat %.1f ms  rtt %.0f ms\n%s\nrender %d  rdrop %d  cola %d",
+                    "%.0f fps  lat %.1f ms  rtt %.0f ms | %s | render %d  rdrop %d  cola %d",
                     fps, lat, rtt, d.decoder, d.rendered, d.renderDrops, d.queueDepth
                 )
+                tick++
+                if (tick % 2 == 1) logMeasure("hud: $txt")
                 runOnUiThread { hud?.text = txt }
             }
         }.apply { isDaemon = true }.start()
@@ -332,8 +353,8 @@ class MainActivity : Activity() {
         synchronized(logBuf) {
             logBuf.append(line).append('\n')
             val lines = logBuf.toString().split('\n')
-            if (lines.size > 120) {
-                val keep = lines.takeLast(120).joinToString("\n")
+            if (lines.size > 800) {
+                val keep = lines.takeLast(800).joinToString("\n")
                 logBuf.setLength(0)
                 logBuf.append(keep)
             }
@@ -375,9 +396,9 @@ class MainActivity : Activity() {
         )
     }
 
-    override fun onPause() { super.onPause() }
-    override fun onStop() { super.onStop() }
-    override fun onDestroy() { super.onDestroy() }
+    override fun onPause() { persistLog(); super.onPause() }
+    override fun onStop() { persistLog(); super.onStop() }
+    override fun onDestroy() { persistLog(); super.onDestroy() }
 
     private fun dp(v: Int): Int =
         (resources.displayMetrics.density * v).toInt()
