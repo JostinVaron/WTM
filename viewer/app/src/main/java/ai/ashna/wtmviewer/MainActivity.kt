@@ -33,18 +33,16 @@ import javax.net.ssl.X509TrustManager
 /**
  * WTM Viewer — viewer nativo del relay (issue #16).
  *
- * v1.1-perf2 — MEDICIONES COMPLETAS EN EL LOG: v1.0 retiro el logging
- * verboso de diagnostico (correcto para produccion) pero eso dejo el
- * "Compartir log" con casi nada — el HUD solo vivia en pantalla y moria
- * con la sesion. perf2 escribe una linea "hud: <fps lat rtt decoder
- * render rdrop cola>" al log persistido cada ~1 s (persistencia en disco
- * cada ~5 s para no meter jank de I/O en el pipeline de video). El log
- * compartido vuelve a ser la fuente de verdad completa para optimizar.
+ * v1.1-perf3 — COLA ACOTADA: el HUD ahora reporta qdrop (deltas
+ * descartados por cola llena, con keyframe fresco pedido al server)
+ * junto a rdrop y cola. Basado en el log perf2 de campo: bitrate real
+ * 35 Mbps (no 12 como el default publicado), pipeline estable a 60 fps
+ * con 0 corrupcion, y cola que crecia a 75 frames sin disparar drops.
  */
 class MainActivity : Activity() {
 
     companion object {
-        const val BUILD = "1.1-perf2"
+        const val BUILD = "1.1-perf3"
     }
 
     private lateinit var prefs: SharedPreferences
@@ -295,8 +293,7 @@ class MainActivity : Activity() {
 
     /**
      * Linea de medicion -> log persistido, SIN tocar la UI ni el
-     * pipeline de video (perf2). Persistencia en disco cada 5 lineas
-     * (~5 s) para no introducir jank de I/O en el render.
+     * pipeline de video. Persistencia en disco cada 5 lineas (~5 s).
      */
     private fun logMeasure(msg: String) {
         val line = "[${(System.currentTimeMillis() - t0) / 1000} s] $msg"
@@ -334,8 +331,8 @@ class MainActivity : Activity() {
                 val lat = ws?.latencyAvg() ?: 0.0
                 val rtt = ws?.rttMs() ?: -1.0
                 val txt = String.format(
-                    "%.0f fps  lat %.1f ms  rtt %.0f ms | %s | render %d  rdrop %d  cola %d",
-                    fps, lat, rtt, d.decoder, d.rendered, d.renderDrops, d.queueDepth
+                    "%.0f fps  lat %.1f ms  rtt %.0f ms | %s | render %d  rdrop %d  qdrop %d  cola %d",
+                    fps, lat, rtt, d.decoder, d.rendered, d.renderDrops, d.queueDrops, d.queueDepth
                 )
                 tick++
                 if (tick % 2 == 1) logMeasure("hud: $txt")

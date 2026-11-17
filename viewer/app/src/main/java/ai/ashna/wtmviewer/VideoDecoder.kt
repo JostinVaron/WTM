@@ -10,18 +10,21 @@ import java.nio.ByteBuffer
 /**
  * Decodificador HEVC/H264 -> Surface directo (issue #16).
  *
- * Pipeline Annex-B verificado (v1.0). v1.1-perf1 agrega dos cosas de
- * rendimiento:
+ * v1.1-perf3 — COLA ACOTADA CON DESCARTE DELTA (latest-wins real):
+ * el log perf2 de campo (230 s, 4K60, 35 Mbps) demostro que la cola de
+ * entrada crecio hasta 75 frames (~1,2 s de video viajando viejo) sin
+ * disparar UN solo render-drop: la politica perf1 comparaba contra pts
+ * SINTETICO local, que siempre avanza en orden — el atraso que buscaba
+ * nunca existia por construccion. Bug de diseno, probado por datos.
  *
- *  1. RENDER-DROP POLICY: si el decoder entrega un frame delta con pts
- *     muy retrasado respecto al mas nuevo ya visto (>120 ms), se suelta
- *     SIN renderizar — en una ráfaga de red el display salta directo al
- *     frame fresco en vez de reproducir el atasco frame a frame. Es la
- *     política de "latest wins" que usan los reproductores de baja
- *     latencia; los keyframes nunca se dropean.
- *  2. STATS para el HUD de la app: frames renderizados, render-drops y
- *     cola — los numeros con los que se optimiza (no se optimiza lo que
- *     no se mide).
+ * perf3 acota la cola de entrada a QUEUE_MAX (8 frames ~ 133 ms) y al
+ * superarla descarta el delta MAS VIEJO (los keyframes y el csd jamas
+ * se descartan — sin referencia el stream se rompe). Al descartar se
+ * pide keyframe fresco al server ({"t":"idr"}, el mismo recovery que
+ * el cliente web) para que el decoder re-sincronice en <1 s en vez de
+ * reproducir 1,2 s de atasco frame a frame. La ventana de corrupcion
+ * hasta que llega el IDR es el costo aceptado — es el tradeoff que hacen
+ * todos los pipeline de baja latencia (scrcpy incluido).
  */
 class VideoDecoder(
     private val surface: Surface,
@@ -31,19 +34,22 @@ class VideoDecoder(
 ) {
     companion object {
         private const val SILENCE_TICKS = 3
-        private val KEY_NALS = setOf(19, 20, 21)
+        private const val KEY_NALS = setOf(19, 20, 21)
         private val START_CODE = byteArrayOf(0, 0, 0, 1)
-        private const val DROP_LAG_US = 120_000L   // 120 ms de atraso -> render-drop
+        private const val DROP_LAG_US = 120_000L   // seguridad inerte (pts sintetico); la cota real es QUEUE_MAX
+        private const val QUEUE_MAX = 8            // ~133 ms a 60 fps: cota dura de video en vuelo
+        private const val KEY_REQ_PERIOD = 20L     // pedir IDR cada N descartes (anti-spam)
     }
 
     class Stats(
         val decoder: String,
         val rendered: Long,
         val renderDrops: Long,
+        val queueDrops: Long,
         val queueDepth: Int
     )
 
-    private class Pending(val data: ByteArray, val pts: Long, val isCsd: Boolean)
+    private class Pending(val data: ByteArray, val pts: Long, val isCsd: Boolean, val isKey: Boolean)
 
     private val lock = Any()
     private var codec: MediaCodec? = null
@@ -56,7 +62,7 @@ class VideoDecoder(
     private var framesFed = 0L
     private var framesOut = 0L
     private var renderDrops = 0L
-    private var drops = 0L
+    private var queueDrops = 0L
     private var frameCounter = 0L
     private var maxSeenPts = 0L
     private var lastErrorLog = 0L
@@ -75,7 +81,7 @@ class VideoDecoder(
 
     /** Snapshot para el HUD (thread-safe). */
     fun stats(): Stats = synchronized(lock) {
-        Stats(activeName, framesOut, renderDrops, pending.size)
+        Stats(activeName, framesOut, renderDrops, queueDrops, pending.size)
     }
 
     /** "avc1.*" -> H.264, "hvc1.*"/"hev1.*" -> HEVC; otro -> error visible. */
@@ -99,6 +105,7 @@ class VideoDecoder(
             keyAu = null
             frameCounter = 0
             maxSeenPts = 0
+            queueDrops = 0
         }
         lastMime = mime
         lastW = width
@@ -137,7 +144,7 @@ class VideoDecoder(
             framesFed = 0
             framesOut = 0
             renderDrops = 0
-            drops = 0
+            queueDrops = 0
             maxSeenPts = 0
             released = false
             session += 1
@@ -163,9 +170,8 @@ class VideoDecoder(
                     override fun onOutputBufferAvailable(m: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
                         if (released) return
                         try {
-                            // RENDER-DROP: delta muy retrasado -> no se pinta.
-                            // El display salta al frame fresco en vez de
-                            // reproducir el atasco frame a frame.
+                            // RENDER-DROP de seguridad (inerte con pts sintetico;
+                            // la cota real de latencia la pone QUEUE_MAX).
                             val lag = maxSeenPts - info.presentationTimeUs
                             if (framesOut > 3 && lag > DROP_LAG_US) {
                                 m.releaseOutputBuffer(index, false)
@@ -202,8 +208,8 @@ class VideoDecoder(
                 fillDecoderListLocked()
             }
 
-            pending.addLast(Pending(annexbCsd, 0L, true))
-            keyAu?.let { pending.addLast(Pending(it, 0L, false)) }
+            pending.addLast(Pending(annexbCsd, 0L, true, true))
+            keyAu?.let { pending.addLast(Pending(it, 0L, false, true)) }
         }
         startWatchdog(mySession)
     }
@@ -224,6 +230,10 @@ class VideoDecoder(
      * Encola un frame convertido a ANNEX-B con pts local. Los keyframes
      * llevan VPS/SPS/PPS in-band (estilo scrcpy) y se guardan para
      * re-inyeccion tras una rotacion de decoder.
+     *
+     * Cota de latencia (perf3): si la cola supera QUEUE_MAX se descarta
+     * el delta MAS VIEJO y se pide keyframe fresco — nunca se toca un
+     * keyframe ni el csd.
      */
     fun feed(data: ByteArray, ts: Long) {
         if (released || !configured) return
@@ -243,11 +253,24 @@ class VideoDecoder(
         if (isKey) keyAu = payload
 
         synchronized(lock) {
-            pending.addLast(Pending(payload, pts, false))
-            if (pending.size > 90) {
-                pending.removeFirst()
-                drops++
-                if (drops == 1L) onNeedKey()   // saturado: pedir keyframe fresco
+            pending.addLast(Pending(payload, pts, false, isKey))
+            while (pending.size > QUEUE_MAX) {
+                var removed = false
+                var i = 0
+                while (i < pending.size) {
+                    val p = pending.elementAt(i)
+                    if (!p.isCsd && !p.isKey) {
+                        pending.removeAt(i)
+                        queueDrops++
+                        removed = true
+                        break
+                    }
+                    i++
+                }
+                if (!removed) break   // cola llena de keys/csd: caso patologico, no tocar
+            }
+            if (queueDrops == 1L || (queueDrops > 0 && queueDrops % KEY_REQ_PERIOD == 0L)) {
+                onNeedKey()   // delta descartado -> referencia rota -> IDR fresco YA
             }
             pumpLocked(c)
         }

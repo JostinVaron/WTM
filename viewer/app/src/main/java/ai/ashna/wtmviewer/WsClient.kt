@@ -21,16 +21,11 @@ import kotlin.concurrent.thread
  * WebSocket minimo (RFC 6455) sobre socket TLS para hablar con el relay WTM.
  * Mismo protocolo que el cliente web (server.py / hevc.py).
  *
- * v1.1-perf1 — dos piezas de latencia portadas del cliente web:
- *
- *  1. HEARTBEAT WiFi (25 ms): ping bidireccional tiny para que la radio
- *     del receptor NO entre en power-save — que agrupa paquetes por
- *     beacon (~100 ms) y añade latencia en rafagas. El cliente web lo
- *     hace desde siempre; la app no lo hacia.
- *  2. SYNC de reloj NTP-style: el server responde {"type":"sync","s":server_ms,"c":eco}
- *     — s = hora del server EN EL MOMENTO de responder. Con rtt = ahora-c
- *     y offset = s - (c + rtt/2), cada frame lleva su ts de captura en el
- *     prefijo -> latencia captura->llegada MEDIBLE por frame.
+ * v1.1-perf3 — GATE del offset de reloj: perf2 mostro lecturas "lat
+ * -215.9 ms" durante los primeros ~6 s, artefacto del offset NTP aun sin
+ * converger (las primeras muestras de sync todavia no han llegado). Ahora
+ * la latencia por frame solo se reporta tras >=5 muestras de sync validas;
+ * antes de eso el HUD muestra lat 0.0 (sin dato), no un numero falso.
  */
 class WsClient(
     private val baseUrl: String,
@@ -41,6 +36,7 @@ class WsClient(
 ) {
     companion object {
         private const val HB_MS = 25L          // como el cliente web
+        private const val SYNC_MIN = 5         // muestras validas antes de reportar lat
     }
 
     private var socket: SSLSocket? = null
@@ -50,6 +46,7 @@ class WsClient(
     // --- reloj/latencia (v1.1-perf1) ---
     @Volatile private var offsetMs = 0.0
     @Volatile private var bestRtt = -1.0       // ms; -1 = sin muestra aun
+    private var syncSamples = 0
     private val recentLat = ArrayDeque<Double>()
 
     /** Media de latencia captura->llegada de los ultimos ~40 frames (ms). */
@@ -270,6 +267,7 @@ class WsClient(
                                     (bestRtt < 0 || rtt <= bestRtt + 2.0)) {
                                     if (bestRtt < 0 || rtt < bestRtt) bestRtt = rtt
                                     offsetMs = s - (c + rtt / 2.0)
+                                    syncSamples++
                                 }
                             }
                         }
@@ -279,7 +277,7 @@ class WsClient(
                 0x2 -> {
                     if (payload.size <= 13) continue
                     val serverTsMs = readU64(payload, 1) / 1000.0
-                    if (offsetMs != 0.0) {
+                    if (syncSamples >= SYNC_MIN) {
                         val lat = System.currentTimeMillis() - (serverTsMs - offsetMs)
                         synchronized(recentLat) {
                             recentLat.addLast(lat)
