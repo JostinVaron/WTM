@@ -20,30 +20,16 @@ import kotlin.concurrent.thread
 /**
  * WebSocket minimo (RFC 6455) sobre socket TLS para hablar con el relay WTM.
  * Mismo protocolo que el cliente web (server.py / hevc.py):
+ * login /api/auth con token viewer -> cookie; handshake con cookie y Origin
+ * identico al Host (byte a byte, con puerto); frames binarios con prefijo
+ * de 13 bytes (u8 flags | u64 ts | u32 enc) antes del AVCC/hvcC AU.
  *
- * 1. LOGIN: POST /api/auth con {"token": <viewer>} y Origin same-site.
- *    El relay responde con la cookie de sesion (rol viewer).
- * 2. WEBSOCKET: handshake con la cookie; al abrir, 6 mensajes de sync de
- *    reloj ({"t":"sync","c":...}) y luego NUNCA responder a los sync del
- *    servidor (evita bucle de eco).
- * 3. VIDEO: config JSON (codec + width/height + hvcC base64) y frames
- *    binarios con PREFIJO de 13 bytes:
- *      u8 flags (bit0 key) | u64 capture-ts (us, server clock) | u32 enc-us | AVCC AU
- *    (broadcast_frame de server.py: payload = flags + ts.to_bytes(8) +
- *     proc.to_bytes(4) + frame). El AVCC AU (4-byte length prefix NAL) es
- *    lo unico que MediaCodec acepta — el prefijo se descarta aqui.
- * 4. HEARTBEAT: el servidor manda "h" como texto — se ignora.
- *
- * Confianza TLS: cert self-signed del relay con SANs de la IP original;
- * aceptamos cadena y hostname (mismo modelo de confianza que el cliente
- * web). La identidad real la da el token de sesion.
- *
- * Cookie de sesion: el VALOR de la cookie es el propio token viewer
- * (session_role() compara request.cookies contra auth_tokens).
- *
- * Origin same-site EXACTO: origin_is_same_site() del server compara
- * Origin == f"https://{request.host}" byte a byte; Host y Origin van
- * identicos, ambos con puerto (como los manda Chrome).
+ * diag3: telemetria de dos canales. Cada evento clave va a la consola en
+ * pantalla (onStatus) Y al POST /log del relay (log_handler imprime
+ * "[client] ..." en la consola del S25) — evidencia del lado cliente sin
+ * adb. Se registran contadores texto/binario, el hex del primer frame y
+ * los close codes del server: el 4000 "replaced" del single-session antes
+ * se tragaba en silencio y congelaba el overlay sin decir nada.
  */
 class WsClient(
     private val baseUrl: String,
@@ -60,7 +46,9 @@ class WsClient(
         thread(name = "wtm-ws") {
             try {
                 login()
+                relayLog("viewer login OK")
                 handshake()
+                relayLog("viewer ws conectado (cookie+origin OK)")
                 // sincronizacion de reloj inicial: 6 muestras como el cliente web
                 for (i in 0 until 6) {
                     sendJson("""{"t":"sync","c":${System.currentTimeMillis()}}""")
@@ -68,12 +56,15 @@ class WsClient(
                 }
                 readLoop()
             } catch (e: Exception) {
-                if (!closed.get()) onStatus("error: ${e.message}")
+                if (!closed.get()) {
+                    onStatus("error: ${e.message}")
+                    relayLog("viewer error: ${e.message}")
+                }
             }
         }
     }
 
-    /** Cert self-signed del relay: cadena + hostname aceptados (ver nota de clase). */
+    /** Cert self-signed del relay: cadena + hostname aceptados. */
     private fun trustAllFactory(): SSLSocketFactory {
         val ctx = SSLContext.getInstance("TLS")
         ctx.init(null, arrayOf<TrustManager>(object : X509TrustManager {
@@ -88,8 +79,7 @@ class WsClient(
 
     /**
      * Login con el token viewer: mismo POST /api/auth que hace el navegador.
-     * El relay responde 200 + Set-Cookie con la sesion viewer. Si el token
-     * esta mal da 401; tras varios intentos fallidos el relay throttlea (429).
+     * 401 token malo, 403 Origin, 429 throttle; 200 + Set-Cookie.
      */
     private fun login() {
         val uri = URI(baseUrl)
@@ -118,8 +108,6 @@ class WsClient(
             throw IOException("login fallido: $motivo")
         }
 
-        // Extraccion robusta: escanear TODAS las cabeceras sin importar
-        // capitalizacion (getHeaderField("Set-Cookie") puede no verla).
         val setCookieValues = conn.headerFields
             ?.entries
             ?.filter { it.key?.equals("set-cookie", ignoreCase = true) == true }
@@ -129,11 +117,10 @@ class WsClient(
 
         sessionCookie = when {
             setCookieValues.isNotEmpty() ->
-                // "wtm_session=abc...; Path=/; Max-Age=...; Secure; HttpOnly"
                 setCookieValues.first().split(";").first().trim()
             else ->
-                // Fallback documentado del server.py: el valor de la cookie
-                // de sesion ES el token (session_role compara contra auth_tokens).
+                // Fallback documentado del server.py: la cookie de sesion
+                // lleva el valor del token (session_role compara contra auth_tokens).
                 "wtm_session=$viewerToken"
         }
         onStatus("login OK — sesion viewer activa")
@@ -148,9 +135,7 @@ class WsClient(
         raw.startHandshake()
         socket = raw
 
-        // origin_is_same_site() del server: Origin == "https://" + Host verbatim.
-        // Host y Origin se escriben aqui, asi que van identicos byte a byte,
-        // ambos con puerto (como los manda Chrome).
+        // Origin == "https://" + Host verbatim, ambos con puerto (como Chrome).
         val origin = "https://$host:$port"
         val key = java.util.Base64.getEncoder().encodeToString(ByteArray(16).also {
             SecureRandom().nextBytes(it)
@@ -172,8 +157,6 @@ class WsClient(
         val input = raw.getInputStream()
         val statusLine = readLine(input)
         if (!statusLine.contains("101")) {
-            // Mostrar el MOTIVO real del server (cuerpo del 401/403), no una
-            // suposicion: leer cabeceras y hasta 200 bytes de cuerpo.
             val detail = StringBuilder()
             try {
                 raw.soTimeout = 1500
@@ -213,9 +196,39 @@ class WsClient(
         return sb.toString()
     }
 
+    /**
+     * POST /log del relay — log_handler imprime "[client] <texto>" en la
+     * consola del S25. Fire-and-forget: si falla (p.ej. 403), la consola en
+     * pantalla sigue siendo el canal primario.
+     */
+    private fun relayLog(text: String) {
+        if (sessionCookie.isEmpty()) return
+        thread(name = "wtm-log", isDaemon = true) {
+            try {
+                val uri = URI(baseUrl)
+                val host = uri.host ?: return@thread
+                val url = URL(baseUrl.trimEnd('/') + "/log")
+                val conn = url.openConnection() as HttpsURLConnection
+                conn.sslSocketFactory = trustAllFactory()
+                conn.hostnameVerifier = acceptHostname
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                conn.setRequestProperty("Content-Type", "text/plain")
+                conn.setRequestProperty("Cookie", sessionCookie)
+                conn.setRequestProperty("Origin", "https://$host")
+                conn.outputStream.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                conn.responseCode
+                conn.disconnect()
+            } catch (_: Exception) {}
+        }
+    }
+
     private fun readLoop() {
         val dis = DataInputStream(socket!!.inputStream)
-        var frames = 0L
+        var textMsgs = 0L
+        var binMsgs = 0L
 
         while (!closed.get()) {
             val b0 = dis.readUnsignedByte()
@@ -235,39 +248,65 @@ class WsClient(
 
             when (opcode) {
                 0x1 -> {
+                    textMsgs++
                     val text = String(payload, Charsets.UTF_8)
-                    if (text == "h") continue // heartbeat del servidor: ignorar
-                    val m = JSONObject(text)
-                    when (m.optString("type")) {
+                    if (textMsgs <= 5)
+                        onStatus("ws texto #$textMsgs (${payload.size}B): ${text.take(90)}")
+                    val m = try { JSONObject(text) } catch (_: Exception) { null }
+                    when (m?.optString("type") ?: "") {
                         "config" -> {
                             val csd = android.util.Base64.decode(
-                                m.getString("description"), android.util.Base64.NO_WRAP
+                                m!!.getString("description"), android.util.Base64.NO_WRAP
                             )
+                            relayLog("viewer config: codec=" + m.getString("codec") +
+                                " " + m.getInt("width") + "x" + m.getInt("height") +
+                                " csd=" + csd.size + "B")
                             onConfig(m.getString("codec"), m.getInt("width"), m.getInt("height"), csd)
                         }
-                        "sync" -> {
-                            // eco de reloj del server: medir offset, NO responder
-                        }
+                        "sync" -> { /* eco de reloj: medir offset, NO responder */ }
                     }
                 }
                 0x2 -> {
-                    // Prefijo del wire format (broadcast_frame): u8 flags |
-                    // u64 ts-us | u32 enc-us — 13 bytes antes del AVCC AU.
+                    binMsgs++
+                    if (binMsgs == 1L) {
+                        val headHex = if (payload.size > 13)
+                            payload.copyOfRange(13, minOf(37, payload.size))
+                                .joinToString(" ") { String.format("%02x", it) }
+                        else "(prefijo incompleto)"
+                        onStatus("PRIMER BINARIO: ${payload.size}B flags=0x" +
+                            String.format("%02x", payload[0]) + " head=" + headHex)
+                        relayLog("viewer primer binario: ${payload.size}B head=$headHex")
+                    } else if (binMsgs % 600 == 0L) {
+                        onStatus("ws: texto=$textMsgs binario=$binMsgs")
+                        relayLog("viewer ws: text=$textMsgs bin=$binMsgs")
+                    }
                     if (payload.size <= 13) continue
                     val tsUs = readU64(payload, 1)
-                    frames++
                     onFrame(
                         payload.copyOfRange(13, payload.size),
                         tsUs / 1000L  // MediaCodec espera ms
                     )
                 }
-                0x8 -> { close(); return }
+                0x8 -> {
+                    // Close del server — antes silencioso. El 4000 "replaced"
+                    // del single-session es un diagnostico clave.
+                    val code = if (payload.size >= 2)
+                        ((payload[0].toInt() and 0xFF) shl 8) or (payload[1].toInt() and 0xFF)
+                    else -1
+                    val reason = if (payload.size > 2)
+                        String(payload.copyOfRange(2, payload.size), Charsets.UTF_8)
+                    else ""
+                    onStatus("ws CERRADO por el server: code=$code razon='$reason'")
+                    relayLog("viewer ws close: code=$code razon='$reason'")
+                    close()
+                    return
+                }
                 0x9 -> sendRaw(0xA, ByteArray(0))
             }
         }
     }
 
-    /** u64 big-endian en payload[offset..offset+7], sin UnsignedLong. */
+    /** u64 big-endian en payload[offset..offset+7]. */
     private fun readU64(p: ByteArray, offset: Int): Long {
         var v = 0L
         for (i in 0 until 8) {

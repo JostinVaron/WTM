@@ -4,6 +4,7 @@ import android.app.Activity
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
+import android.text.method.ScrollingMovementMethod
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.SurfaceHolder
@@ -20,20 +21,26 @@ import android.content.SharedPreferences
 
 /**
  * Stage 1 (issue #16): viewer nativo.
- * - La app pide SOLO: URL del relay + token viewer
- * - La app hace login sola (POST /api/auth) y recibe la cookie
- * - El video va en SurfaceView a pantalla completa, con un overlay de
- *   estado SIEMPRE visible encima.
- * - El codec lo decide el server via config ("avc1.*" H.264 scrcpy por
- *   defecto, "hvc1.*" HEVC issue #4) — no se hardcodea.
- * - Ante error: vuelve a la pantalla de config mostrando el motivo.
+ *
+ * diag3: consola multilinea en pantalla. Las versiones anteriores tenian un
+ * overlay de UNA linea que se sobreescribia a si mismo: el silencio era
+ * indistinguible de varias fallas distintas, y "decodificando" se pintaba al
+ * recibir la config — antes de que existiera un solo frame — sin probar nada.
+ * Ahora cada evento queda visible con timestamp, y los eventos clave se
+ * reportan tambien al POST /log del relay (consola del S25).
  */
 class MainActivity : Activity() {
+
+    companion object {
+        const val BUILD = "diag3"
+    }
 
     private lateinit var prefs: SharedPreferences
     private var wsClient: WsClient? = null
     private var decoder: VideoDecoder? = null
     private var overlay: TextView? = null
+    private val logBuf = StringBuilder()
+    private val t0 = System.currentTimeMillis()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,7 +54,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad, pad, pad)
         }
-        val label = TextView(this).apply { text = "WTM Viewer — conectar al relay" }
+        val label = TextView(this).apply { text = "WTM Viewer build=$BUILD — conectar al relay" }
         val urlInput = EditText(this).apply {
             hint = "https://<ip-del-S25>:8443"
             setText(prefs.getString("base_url", ""))
@@ -88,16 +95,19 @@ class MainActivity : Activity() {
     }
 
     private fun startStream(url: String, token: String) {
-        // video abajo, estado SIEMPRE visible arriba
+        synchronized(logBuf) { logBuf.setLength(0) }
+
         val surfaceView = SurfaceView(this)
         val statusOverlay = TextView(this).apply {
-            text = "conectando…"
+            text = "viewer build=$BUILD"
             setTextColor(Color.parseColor("#7FFF7F"))
             typeface = Typeface.MONOSPACE
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            setBackgroundColor(Color.argb(0x88, 0x00, 0x00, 0x00))
-            val pad = dp(8)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setBackgroundColor(Color.argb(0xCC, 0x00, 0x00, 0x00))
+            val pad = dp(6)
             setPadding(pad, pad, pad, pad)
+            maxLines = 18
+            movementMethod = ScrollingMovementMethod()
         }
         overlay = statusOverlay
 
@@ -112,13 +122,15 @@ class MainActivity : Activity() {
         frame.addView(
             statusOverlay,
             FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.START
-            ).apply { setMargins(dp(6), dp(6), 0, 0) }
+                Gravity.TOP
+            )
         )
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(frame)
+        showStatus("viewer build=$BUILD")
+        showStatus("conectando a $url")
 
         surfaceView.holder.setKeepScreenOn(true)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
@@ -127,11 +139,11 @@ class MainActivity : Activity() {
                 wsClient = WsClient(
                     baseUrl = url,
                     viewerToken = token,
-                    // codec tal cual lo declara el server: "avc1.*" H.264,
-                    // "hvc1.*" HEVC — el decoder decide el mime
+                    // config del server TAL CUAL: el codec queda registrado en
+                    // la consola — avc1 (H.264) o hvc1 (HEVC), con evidencia
                     onConfig = { codec, width, height, csd ->
+                        showStatus("config del server: codec=$codec ${width}x${height} csd=${csd.size}B")
                         decoder?.configure(codec, width, height, csd)
-                        showStatus("decodificando ${width}x${height}")
                     },
                     onFrame = { data, pts -> decoder?.feed(data, pts) },
                     onStatus = { msg -> showStatus(msg) }
@@ -147,14 +159,30 @@ class MainActivity : Activity() {
         })
     }
 
-    /** Estado al overlay; si es error, vuelve a config con el motivo. */
+    /** Consola: cada evento appendea con timestamp; error → volver a config. */
     private fun showStatus(msg: String) {
+        val secs = (System.currentTimeMillis() - t0) / 1000
+        val line = "[" + secs + "s] " + msg
+        val text: String
+        synchronized(logBuf) {
+            logBuf.append(line).append('\n')
+            val lines = logBuf.toString().split('\n')
+            if (lines.size > 120) {
+                val keep = lines.takeLast(120).joinToString("\n")
+                logBuf.setLength(0)
+                logBuf.append(keep)
+            }
+            text = logBuf.toString()
+        }
         runOnUiThread {
-            overlay?.text = msg
+            overlay?.let { tv ->
+                tv.text = text
+                tv.post { tv.scrollTo(0, tv.lineCount * tv.lineHeight) }
+            }
             if (msg.startsWith("error:")) {
                 wsClient?.close()
                 decoder?.release()
-                buildConfigUI("ERROR: ${msg.removePrefix("error: ").removePrefix("error:")}")
+                buildConfigUI("ERROR: " + msg.removePrefix("error: ").removePrefix("error:"))
             }
         }
     }
