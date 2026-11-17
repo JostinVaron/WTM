@@ -34,9 +34,14 @@ import kotlin.concurrent.thread
  * Confianza TLS: el relay usa un cert self-signed cuyos SANs llevan la IP
  * del momento en que se generó; la IP del hotspot cambia, así que el
  * hostname del cert casi nunca coincidirá con el de hoy. Mismo modelo de
- * confianza que el cliente web (que acepta el cert tras verificar el
- * fingerprint SHA-256 fuera de banda): aceptamos la cadena Y el hostname.
+ * confianza que el cliente web: aceptamos la cadena Y el hostname.
  * La identidad real del relay la da el token de sesión, no el SAN del cert.
+ *
+ * Cookie de sesión: server.py hace response.set_cookie(AUTH_COOKIE, token)
+ * — el VALOR de la cookie es el propio token (session_role() compara
+ * request.cookies contra auth_tokens). Se parsea Set-Cookie de la respuesta
+ * de forma robusta (headerFields case-insensitive); si la cabecera no
+ * llegara visible, el fallback documentado es wtm_session=<token>.
  */
 class WsClient(
     private val baseUrl: String,
@@ -110,12 +115,25 @@ class WsClient(
             }
             throw IOException("login fallido: $motivo")
         }
-        val setCookie = conn.getHeaderField("Set-Cookie")
+
+        // Extracción robusta: escanear TODAS las cabeceras sin importar
+        // capitalización (getHeaderField("Set-Cookie") puede no verla).
+        val setCookieValues = conn.headerFields
+            ?.entries
+            ?.filter { it.key?.equals("set-cookie", ignoreCase = true) == true }
+            ?.flatMap { it.value }
+            .orEmpty()
         conn.disconnect()
-        if (setCookie.isNullOrEmpty()) {
-            throw IOException("login OK pero el relay no mando cookie — reportar")
+
+        sessionCookie = when {
+            setCookieValues.isNotEmpty() ->
+                // "wtm_session=abc...; Path=/; Max-Age=...; Secure; HttpOnly"
+                setCookieValues.first().split(";").first().trim()
+            else ->
+                // Fallback documentado del server.py: el valor de la cookie
+                // de sesión ES el token (session_role compara contra auth_tokens).
+                "wtm_session=$viewerToken"
         }
-        sessionCookie = setCookie.split(";").first().trim()
         onStatus("login OK — sesion viewer activa")
     }
 
