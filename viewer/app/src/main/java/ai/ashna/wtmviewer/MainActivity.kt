@@ -31,18 +31,12 @@ import javax.net.ssl.X509TrustManager
 /**
  * Stage 1 (issue #16): viewer nativo.
  *
- * diag8: el log diag7 fue concluyente — los TRES decoders de la tablet
- * (incluido el SOFTWARE c2.android.hevc) consumieron input y produjeron
- * CERO frames, sin error. Cuando hasta el software falla, quedan dos
- * mundos: (a) el stack de codecs de la tablet esta roto, (b) los bytes
- * del stream real no son decodificables por parsers estrictos (la
- * prueba de "Chrome lo decodifica" ocurrio en el S25, otro dispositivo).
- *
- * diag8 agrega el AUTOTEST OFFLINE (CodecSelfTest): encode->decode
- * loopback local de hevc/avc en 640x480 y 2000x1200, en modo bytebuffer
- * y en modo surface, mas el reporte de capacidades declaradas de cada
- * decoder y el modelo del dispositivo. Corre SIN relay y SIN conectar:
- * abrir la app basta. El resultado discrimina (a) de (b) sin ambiguedad.
+ * diag8: la rotacion de diag7 estaba rota (los decoders rotados jamas
+ * recibian el IDR — "AGOTADOS" no era un veredicto valido). El fix vive
+ * en VideoDecoder.kt: re-inyeccion de IDR capturado + pedido de IDR
+ * fresco al server ("t":"idr", el recovery del cliente web) en cada
+ * rotacion + log del tipo NAL de los primeros AUs. Aqui solo cambia el
+ * cableado del callback onNeedKey y el numero de build.
  */
 class MainActivity : Activity() {
 
@@ -59,11 +53,6 @@ class MainActivity : Activity() {
     private val logBuf = StringBuilder()
     private val t0 = System.currentTimeMillis()
     private var prevHandler: Thread.UncaughtExceptionHandler? = null
-
-    // diag8: autotest offline
-    private val selfTestBuf = StringBuilder()
-    private var selfTestView: TextView? = null
-    private var selfTestDone = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -117,15 +106,6 @@ class MainActivity : Activity() {
         try { reporter.start(); reporter.join(4000) } catch (_: Exception) {}
     }
 
-    /** diag8: una linea del autotest -> pantalla config + disco persistido. */
-    private fun logSelfTest(line: String) {
-        synchronized(selfTestBuf) { selfTestBuf.append(line).append('\n') }
-        try {
-            prefs.edit().putString("selftest", selfTestBuf.toString()).commit()
-        } catch (_: Exception) {}
-        runOnUiThread { selfTestView?.append(line + "\n") }
-    }
-
     private fun buildConfigUI(initialStatus: String) {
         val pad = dp(12)
         val root = LinearLayout(this).apply {
@@ -158,17 +138,15 @@ class MainActivity : Activity() {
             prefs.edit().remove("last_crash").apply()
         }
 
-        // consola PERSISTIDA de la sesion anterior
+        // consola PERSISTIDA de la sesion anterior — sobrevive a cualquier muerte
         val lastConsole = prefs.getString("last_console", null)
-        val hasConsole = !lastConsole.isNullOrEmpty()
-        if (lastConsole != null && lastConsole.isNotEmpty()) {
+        if (!lastConsole.isNullOrEmpty()) {
             root.addView(TextView(this).apply {
                 text = "ULTIMA SESION (persistida):"
                 setTextColor(Color.parseColor("#7FFF7F"))
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             })
             root.addView(TextView(this).apply {
-                // null-check directo arriba: smart cast valida el take()
                 text = lastConsole.take(6000)
                 setTextColor(Color.parseColor("#7FFF7F"))
                 typeface = Typeface.MONOSPACE
@@ -176,18 +154,12 @@ class MainActivity : Activity() {
                 maxLines = 14
                 movementMethod = ScrollingMovementMethod()
             })
-        }
-
-        val selftest = prefs.getString("selftest", "") ?: ""
-        if (hasConsole || selftest.isNotEmpty()) {
-            val shareBtn = Button(this).apply { text = "Compartir log (selftest + sesion)" }
+            val shareBtn = Button(this).apply { text = "Compartir log" }
             shareBtn.setOnClickListener {
-                val st = prefs.getString("selftest", "") ?: ""
-                val text = "WTM viewer $BUILD\n\nSELFTEST:\n$st\n\n" +
-                    "--- log de la ultima sesion:\n\n${lastConsole ?: "(sin sesion)"}"
                 val send = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, text)
+                    putExtra(Intent.EXTRA_TEXT,
+                        "WTM viewer $BUILD — log de la ultima sesion:\n\n$lastConsole")
                 }
                 startActivity(Intent.createChooser(send, "Compartir log"))
             }
@@ -211,39 +183,12 @@ class MainActivity : Activity() {
             }
         }
 
-        // diag8: vista del autotest offline
-        val stView = TextView(this).apply {
-            setTextColor(Color.parseColor("#7FFF7F"))
-            typeface = Typeface.MONOSPACE
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
-            maxLines = 12
-            movementMethod = ScrollingMovementMethod()
-            text = if (selftest.isNotEmpty()) selftest else "selftest: pendiente"
-        }
-        selfTestView = stView
-
         root.addView(label)
         root.addView(urlInput)
         root.addView(tokenInput)
         root.addView(connectBtn)
         root.addView(status)
-        root.addView(TextView(this).apply {
-            text = "SELFTEST (offline — corre solo; espera 'selftest completo'):"
-            setTextColor(Color.parseColor("#7FFF7F"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-        })
-        root.addView(stView)
         setContentView(root)
-
-        if (!selfTestDone) {
-            selfTestDone = true
-            synchronized(selfTestBuf) { selfTestBuf.setLength(0) }
-            prefs.edit().remove("selftest").commit()
-            stView.text = "selftest: corriendo..."
-            Thread {
-                CodecSelfTest.runAll { line -> logSelfTest(line) }
-            }.apply { isDaemon = true }.start()
-        }
     }
 
     private fun startStream(url: String, token: String) {
@@ -300,7 +245,11 @@ class MainActivity : Activity() {
                 decoder?.release()
                 decoder = null
                 showStatus("surface creado")
-                decoder = VideoDecoder(holder.surface) { msg -> showStatus(msg) }
+                decoder = VideoDecoder(
+                    holder.surface,
+                    { msg -> showStatus(msg) },
+                    { wsClient?.requestKey() }
+                )
                 wsClient = WsClient(
                     baseUrl = url,
                     viewerToken = token,

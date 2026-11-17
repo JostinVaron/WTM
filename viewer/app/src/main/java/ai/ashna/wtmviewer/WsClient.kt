@@ -24,10 +24,11 @@ import kotlin.concurrent.thread
  * identico al Host (byte a byte, con puerto); frames binarios con prefijo
  * de 13 bytes (u8 flags | u64 ts | u32 enc) antes del AU length-prefixed.
  *
- * diag6: pts viaja en MICROSEGUNDOS (MediaCodec espera us; antes se divia
- * a ms por un comentario equivocado), y hay un resumen de contadores cada
- * 5 s invariante — antes solo se logueaba en %600 y un stream escaso
- * (pantalla estatica) dejaba la consola muda.
+ * diag8: agrega requestKey() — manda {"t":"idr"}, el MISMO mensaje de
+ * recovery que usa el cliente web cuando pierde decodificacion, para que
+ * el server pida un keyframe fresco al encoder vivo (el server lo aplica
+ * con rate-limit via request_key()). El decoder de la app lo usa al
+ * configurarse y en cada rotacion de decoder.
  *
  * Telemetria de dos canales: consola en pantalla + POST /log del relay.
  */
@@ -62,6 +63,11 @@ class WsClient(
                 }
             }
         }
+    }
+
+    /** Pide un keyframe fresco al encoder vivo — recovery del cliente web. */
+    fun requestKey() {
+        sendJson("""{"t":"idr"}""")
     }
 
     /** Cert self-signed del relay: cadena + hostname aceptados. */
@@ -285,7 +291,6 @@ class WsClient(
                     }
                     if (payload.size <= 13) continue
                     val tsUs = readU64(payload, 1)
-                    // MediaCodec espera pts en MICROSEGUNDOS
                     onFrame(payload.copyOfRange(13, payload.size), tsUs)
                 }
                 0x8 -> {
