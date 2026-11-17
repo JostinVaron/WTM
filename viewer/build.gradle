@@ -30,7 +30,7 @@ android {
 }
 
 dependencies {
-    // Sin dependencias externas: WebSocket vía HttpURLConnection (AOSP),
+    // Sin dependencias externas: WebSocket vía socket TLS directo,
     // JSON vía org.json (AOSP), decodificación vía MediaCodec (AOSP).
-    // Cero DSL de red externo = APK mínimo y sin supply-chain.
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.22'
 }
