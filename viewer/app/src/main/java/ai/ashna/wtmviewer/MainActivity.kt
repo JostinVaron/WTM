@@ -3,13 +3,12 @@ package ai.ashna.wtmviewer
 import android.app.Activity
 import android.content.Intent
 import android.graphics.Color
-import android.graphics.Typeface
 import android.os.Bundle
-import android.text.method.ScrollingMovementMethod
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
@@ -17,6 +16,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import android.content.Context
 import android.content.SharedPreferences
 import java.net.URL
@@ -29,19 +29,24 @@ import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
 /**
- * Stage 1 (issue #16): viewer nativo.
+ * WTM Viewer — viewer nativo del relay (issue #16).
  *
- * diag10: Chrome con ?hw=prefer-hardware muestra VIDEO en la misma tablet
- * — decodifica este stream via hardware. La diferencia estructural que
- * quedaba contra mi app: Chrome alimenta MediaCodec en ANNEX-B (start
- * codes), mi app alimentaba length-prefixed + hvcC en csd-0. El cambio a
- * Annex-B de punta a punta vive en VideoDecoder.kt; aqui solo cambia el
- * numero de build. Se conserva toda la telemetria de diag5-9.
+ * Produccion (post diag10): la consola de diagnostico YA NO se muestra
+ * sobre el video — desaparece sola en cuanto el primer frame llega al
+ * surface (la franja grisacea que se veia arriba era ese overlay). El
+ * pipeline Annex-B (el fix que hizo funcionar el video: length-prefixed
+ * -> start codes, csd-0 como VPS/SPS/PPS con start codes, params in-band
+ * en keyframes) vive en VideoDecoder.kt.
+ *
+ * Se conserva del arsenal de diagnostico SOLO lo util para el usuario:
+ * estado de conexion en pantalla hasta que hay video, errores con boton
+ * Volver, crash-report al relay, y "Compartir log" en la pantalla de
+ * configuracion (el log completo sigue persistiendose a disco).
  */
 class MainActivity : Activity() {
 
     companion object {
-        const val BUILD = "diag10"
+        const val BUILD = "1.0"
     }
 
     private lateinit var prefs: SharedPreferences
@@ -65,7 +70,7 @@ class MainActivity : Activity() {
         buildConfigUI("")
     }
 
-    /** Consola -> disco, sincrono: sobrevive a SIGKILL y crashes nativos. */
+    /** Log -> disco, sincrono: sobrevive a cualquier muerte del proceso. */
     private fun persistLog() {
         try {
             synchronized(logBuf) {
@@ -112,7 +117,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad, pad, pad)
         }
-        val label = TextView(this).apply { text = "WTM Viewer build=$BUILD — conectar al relay" }
+        val label = TextView(this).apply { text = "WTM Viewer v$BUILD — conectar al relay" }
         val urlInput = EditText(this).apply {
             hint = "https://<ip-del-S25>:8443"
             setText(prefs.getString("base_url", ""))
@@ -123,7 +128,7 @@ class MainActivity : Activity() {
         }
         val status = TextView(this).apply {
             text = initialStatus.ifEmpty { "Estado: desconectado" }
-            setTextColor(if (initialStatus.startsWith("ERROR")) Color.parseColor("#FF6A6A") else Color.WHITE)
+            setTextColor(if (initialStatus.startsWith("error")) Color.parseColor("#FF6A6A") else Color.WHITE)
         }
         val connectBtn = Button(this).apply { text = "Conectar" }
 
@@ -139,25 +144,12 @@ class MainActivity : Activity() {
 
         val lastConsole = prefs.getString("last_console", null)
         if (!lastConsole.isNullOrEmpty()) {
-            root.addView(TextView(this).apply {
-                text = "ULTIMA SESION (persistida):"
-                setTextColor(Color.parseColor("#7FFF7F"))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            })
-            root.addView(TextView(this).apply {
-                text = lastConsole.take(6000)
-                setTextColor(Color.parseColor("#7FFF7F"))
-                typeface = Typeface.MONOSPACE
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
-                maxLines = 14
-                movementMethod = ScrollingMovementMethod()
-            })
-            val shareBtn = Button(this).apply { text = "Compartir log" }
+            val shareBtn = Button(this).apply { text = "Compartir log de la ultima sesion" }
             shareBtn.setOnClickListener {
                 val send = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
                     putExtra(Intent.EXTRA_TEXT,
-                        "WTM viewer $BUILD — log de la ultima sesion:\n\n$lastConsole")
+                        "WTM viewer v$BUILD — log de la ultima sesion:\n\n$lastConsole")
                 }
                 startActivity(Intent.createChooser(send, "Compartir log"))
             }
@@ -190,23 +182,20 @@ class MainActivity : Activity() {
     }
 
     private fun startStream(url: String, token: String) {
-        synchronized(logBuf) {
-            logBuf.setLength(0)
-        }
+        synchronized(logBuf) { logBuf.setLength(0) }
         persistLog()
         backBtn = null
 
         val surfaceView = SurfaceView(this)
+        // Estado de conexion: MINIMAL y desaparece en cuanto hay video.
         val statusOverlay = TextView(this).apply {
-            text = "viewer build=$BUILD"
-            setTextColor(Color.parseColor("#7FFF7F"))
-            typeface = Typeface.MONOSPACE
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            setBackgroundColor(Color.argb(0xCC, 0x00, 0x00, 0x00))
-            val pad = dp(6)
+            text = "conectando..."
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setBackgroundColor(Color.argb(0x80, 0x00, 0x00, 0x00))
+            val pad = dp(8)
             setPadding(pad, pad, pad, pad)
-            maxLines = 18
-            movementMethod = ScrollingMovementMethod()
+            visibility = View.VISIBLE
         }
         overlay = statusOverlay
 
@@ -221,35 +210,40 @@ class MainActivity : Activity() {
         frame.addView(
             statusOverlay,
             FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
             )
         )
         frameRoot = frame
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(frame)
-        showStatus("viewer build=$BUILD")
-        showStatus("conectando a $url")
+        showStatus("viewer v$BUILD — conectando a $url")
 
         surfaceView.holder.setKeepScreenOn(true)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
+                // Cerrar la sesion previa ANTES de crear otra: el server es
+                // single-session y la conexion vieja recibia el close 4000.
                 wsClient?.close()
                 wsClient = null
                 decoder?.release()
                 decoder = null
-                showStatus("surface creado")
                 decoder = VideoDecoder(
                     holder.surface,
                     { msg -> showStatus(msg) },
+                    { runOnUiThread {
+                        overlay?.visibility = View.GONE   // video fluye: overlay fuera
+                        backBtn?.visibility = View.GONE
+                        Toast.makeText(this@MainActivity, "WTM: video activo", Toast.LENGTH_SHORT).show()
+                    } },
                     { wsClient?.requestKey() }
                 )
                 wsClient = WsClient(
                     baseUrl = url,
                     viewerToken = token,
                     onConfig = { codec, width, height, csd ->
-                        showStatus("config del server: codec=$codec ${width}x${height} csd=${csd.size}B")
+                        showStatus("stream: $codec ${width}x${height}")
                         decoder?.configure(codec, width, height, csd)
                     },
                     onFrame = { data, pts -> decoder?.feed(data, pts) },
@@ -260,17 +254,18 @@ class MainActivity : Activity() {
 
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
             override fun surfaceDestroyed(holder: SurfaceHolder) {
-                showStatus("surface destruido")
                 decoder?.release()
                 decoder = null
             }
         })
     }
 
+    /**
+     * Log interno persistido + estado en pantalla SOLO mientras no hay
+     * video. "error:" corta la sesion y muestra el boton Volver.
+     */
     private fun showStatus(msg: String) {
-        val secs = (System.currentTimeMillis() - t0) / 1000
-        val line = "[$secs s] $msg"
-        val text: String
+        val line = "[${(System.currentTimeMillis() - t0) / 1000} s] $msg"
         synchronized(logBuf) {
             logBuf.append(line).append('\n')
             val lines = logBuf.toString().split('\n')
@@ -279,13 +274,14 @@ class MainActivity : Activity() {
                 logBuf.setLength(0)
                 logBuf.append(keep)
             }
-            text = logBuf.toString()
         }
         persistLog()
         runOnUiThread {
             overlay?.let { tv ->
-                tv.text = text
-                tv.post { tv.scrollTo(0, tv.lineCount * tv.lineHeight) }
+                if (tv.visibility != View.GONE || msg.startsWith("error:")) {
+                    tv.visibility = View.VISIBLE
+                    tv.text = msg
+                }
             }
             if (msg.startsWith("error:")) {
                 wsClient?.close()
@@ -295,8 +291,10 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Boton Volver sobre el mensaje de error. */
     private fun showBackButton() {
         if (backBtn != null) return
+        overlay?.visibility = View.VISIBLE
         val b = Button(this).apply { text = "Volver" }
         b.setOnClickListener {
             backBtn = null
@@ -310,13 +308,13 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            ).apply { bottomMargin = dp(16) }
+            ).apply { bottomMargin = dp(24) }
         )
     }
 
-    override fun onPause() { showStatus("app: onPause"); super.onPause() }
-    override fun onStop() { showStatus("app: onStop"); super.onStop() }
-    override fun onDestroy() { showStatus("app: onDestroy"); super.onDestroy() }
+    override fun onPause() { super.onPause() }
+    override fun onStop() { super.onStop() }
+    override fun onDestroy() { super.onDestroy() }
 
     private fun dp(v: Int): Int =
         (resources.displayMetrics.density * v).toInt()

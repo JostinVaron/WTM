@@ -8,34 +8,27 @@ import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 
 /**
- * Decodificador -> Surface directo (issue #16, stage 1).
+ * Decodificador HEVC/H264 -> Surface directo (issue #16).
  *
- * diag10: LA PISTA DEFINITIVA. Con "?hw=prefer-hardware" el cliente web
- * muestra VIDEO en la misma tablet — o sea Chrome decodifica este stream
- * via hardware. Mi app usaba el mismo MediaCodec y out=0. La diferencia
- * estructural que queda: Chrome alimenta el decoder en formato ANNEX-B
- * (start codes 00 00 00 01, csd-0 como VPS/SPS/PPS con start codes),
- * mientras mi app alimentaba length-prefixed + hvcC en csd-0. Es tambien
- * exactamente el formato que usa scrcpy (probado en Samsunges de todo
- * pelaje). diag10 convierte TODO a Annex-B antes del decoder:
+ * El hallazgo central (diag10): los decoders de esta tablet rechazan en
+ * silencio el formato length-prefixed + hvcC en csd-0, pero decodifican
+ * perfecto en ANNEX-B (start codes 00 00 00 01, csd-0 = VPS/SPS/PPS con
+ * start codes, params in-band en cada keyframe) — el formato que usa
+ * scrcpy y el que Chrome alimenta a MediaCodec. Verificado con video
+ * real: 1500+ frames, 0 drops, hardware Qualcomm.
  *
- *  - csd-0 = VPS+SPS+PPS del hvcC re-empaquetados con start codes
- *  - cada AU: prefijos de 4 bytes -> 00 00 00 01 (NAL por NAL)
- *  - keyframes llevan VPS/SPS/PPS in-band al inicio (estilo scrcpy)
- *  - el IDR capturado se guarda en Annex-B para re-inyeccion
- *
- * Se conserva todo diag8/9: rotacion valida (boot completo + IDR
- * re-inyectado por decoder), "t":"idr" fresco en cada rotacion, log de
- * tipo NAL, pts local monotónico, saneador (defensa barata aunque los
- * AUs llegaban limpios).
+ * Produccion: la instrumentacion de diagnostico se retira; el watchdog
+ * sigue dentro como red de seguridad (silencioso mientras hay frames) y
+ * la rotacion de decoders se mantiene como fallback automatico.
  */
 class VideoDecoder(
     private val surface: Surface,
     private val onStatus: (String) -> Unit,
+    private val onFirstFrame: () -> Unit,
     private val onNeedKey: () -> Unit
 ) {
     companion object {
-        private const val SILENCE_TICKS = 3          // 3 ticks de 2s = 6s de out=0
+        private const val SILENCE_TICKS = 3          // 3 ticks de 2s = 6s sin frames
         private val KEY_NALS = setOf(19, 20, 21)      // IDR_W_RADL, IDR_N_LP, CRA_NUT
         private val START_CODE = byteArrayOf(0, 0, 0, 1)
     }
@@ -53,21 +46,17 @@ class VideoDecoder(
     private var framesFed = 0L
     private var framesOut = 0L
     private var drops = 0L
-    private var realFed = 0L
     private var frameCounter = 0L
-    private var loggedAus = 0
-    private var configuredAt = 0L
+    private var lastErrorLog = 0L
 
     private val freeInputs = ArrayDeque<Int>()
     private val pending = ArrayDeque<Pending>()
 
-    private var lastCodecName = ""
     private var lastMime = ""
     private var lastW = 0
     private var lastH = 0
-    private var lastCsd: ByteArray = ByteArray(0)   // hvcC crudo del server
-    private var annexbCsd: ByteArray = ByteArray(0) // VPS/SPS/PPS con start codes
-    private var keyAu: ByteArray? = null            // IDR en Annex-B
+    private var annexbCsd: ByteArray = ByteArray(0)
+    private var keyAu: ByteArray? = null
 
     private val decoderNames = mutableListOf<String>()
     private var decoderIdx = 0
@@ -83,7 +72,7 @@ class VideoDecoder(
     fun configure(codecName: String, width: Int, height: Int, csd: ByteArray) {
         val mime = mimeOf(codecName)
         if (mime == null) {
-            onStatus("codec NO soportado por el viewer: $codecName")
+            onStatus("error: codec no soportado: $codecName")
             return
         }
         synchronized(lock) {
@@ -91,38 +80,28 @@ class VideoDecoder(
             decoderIdx = 0
             exhausted = false
             keyAu = null
-            loggedAus = 0
             frameCounter = 0
         }
-        lastCodecName = codecName
         lastMime = mime
         lastW = width
         lastH = height
-        lastCsd = csd
-        annexbCsd = buildAnnexbCsd(csd)
+        annexbCsd = buildAnnexbCsd(mime, csd)
         if (annexbCsd.isEmpty()) {
-            onStatus("csd: no se pudieron extraer los NALs (hvcC/avcC raro) — abortando")
+            onStatus("error: csd no parseable (codec $codecName)")
             return
         }
-        onStatus("csd Annex-B: ${annexbCsd.size}B (VPS/SPS/PPS con start codes, estilo scrcpy)")
         openDecoder(null)
-        onStatus("pidiendo IDR fresco al server ({\"t\":\"idr\"} — como el cliente web)")
         onNeedKey()
     }
 
-    /**
-     * csd Annex-B para el formato: NALs del hvcC/avcC unidos con start
-     * codes 00 00 00 01 — asi configuran csd-0 scrcpy/VLC y Chrome-Android
-     * para AVC (SPS+PPS) y HEVC (VPS+SPS+PPS).
-     */
-    private fun buildAnnexbCsd(csd: ByteArray): ByteArray {
+    /** csd Annex-B: NALs del hvcC/avcC unidos con start codes. */
+    private fun buildAnnexbCsd(mime: String, csd: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()
-        if (lastMime == MediaFormat.MIMETYPE_VIDEO_HEVC) {
+        if (mime == MediaFormat.MIMETYPE_VIDEO_HEVC) {
             for (nal in nalsFromHvcC(csd)) {
                 out.write(START_CODE); out.write(nal)
             }
         } else {
-            // avcC: sps en csd-0, pps en csd-1 — aqui unimos ambos en csd-0
             val (sps, pps) = nalsFromAvcC(csd) ?: return ByteArray(0)
             out.write(START_CODE); out.write(sps)
             out.write(START_CODE); out.write(pps)
@@ -139,16 +118,12 @@ class VideoDecoder(
             pending.clear()
             framesFed = 0
             framesOut = 0
-            realFed = 0
             drops = 0
             released = false
             session += 1
             mySession = session
-            configuredAt = System.currentTimeMillis()
 
             val format = MediaFormat.createVideoFormat(lastMime, lastW, lastH).apply {
-                // csd-0 ANNEX-B (no el hvcC crudo): el formato que OMX/c2
-                // Samsung mastican de buena gana (scrcpy/VLC/Chrome lo usan)
                 setByteBuffer("csd-0", ByteBuffer.wrap(annexbCsd))
                 setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 4 * 1024 * 1024)
             }
@@ -170,32 +145,23 @@ class VideoDecoder(
                         try {
                             m.releaseOutputBuffer(index, true)
                             framesOut++
-                            if (framesOut == 1L) {
-                                onStatus("PRIMER FRAME RENDERIZADO al surface " +
-                                    "(decoder='$activeName', ${info.size}B)")
-                            } else if (framesOut % 300 == 0L) {
-                                onStatus("render: $framesOut frames al surface ('$activeName')")
-                            }
+                            if (framesOut == 1L) onFirstFrame()
                         } catch (e: Exception) {
-                            onStatus("decoder error al renderizar: ${e.message}")
+                            logRateLimited("error al renderizar frame: ${e.message}")
                         }
                     }
 
-                    override fun onOutputFormatChanged(m: MediaCodec, format: MediaFormat) {
-                        if (released) return
-                        onStatus("decoder formato real ('$activeName'): $format")
-                    }
+                    override fun onOutputFormatChanged(m: MediaCodec, format: MediaFormat) {}
 
                     override fun onError(m: MediaCodec, e: MediaCodec.CodecException) {
                         if (released) return
-                        onStatus("decoder ONERROR ('$activeName') code=${e.errorCode} " +
-                            "recoverable=${e.isRecoverable} transitorio=${e.isTransient}: ${e.diagnosticInfo}")
+                        logRateLimited("decoder '$activeName' error code=${e.errorCode}: ${e.diagnosticInfo}")
                     }
                 })
                 c.configure(format, surface, null, 0)
                 c.start()
             } catch (e: Exception) {
-                onStatus("decoder: FALLO abrir '${name ?: "default"}' ($lastMime): ${e.message}")
+                onStatus("error: fallo abrir decoder (${e.message})")
                 return
             }
             codec = c
@@ -205,22 +171,14 @@ class VideoDecoder(
                 decoderNames.add(activeName)
                 fillDecoderListLocked()
             }
-            onStatus("decoder activo: '$activeName' — $lastMime ${lastW}x${lastH} modo ANNEX-B")
 
-            // boot del decoder: csd via input + IDR re-inyectado (si hay)
             pending.addLast(Pending(annexbCsd, 0L, true))
-            val k = keyAu
-            if (k != null) {
-                pending.addLast(Pending(k, 0L, false))
-                onStatus("re-inyectando IDR capturado (${k.size}B, Annex-B) al decoder nuevo")
-            } else {
-                onStatus("sin IDR capturado aun — esperando el keyframe del server")
-            }
+            keyAu?.let { pending.addLast(Pending(it, 0L, false)) }
         }
         startWatchdog(mySession)
     }
 
-    /** Lista completa de decoders para el mime (para la auto-rotacion). */
+    /** Lista de decoders del mime, para el fallback automatico. */
     private fun fillDecoderListLocked() {
         try {
             val others = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
@@ -229,17 +187,13 @@ class VideoDecoder(
                 .map { it.name }
                 .filter { it != activeName }
             decoderNames.addAll(others)
-            onStatus("decoders $lastMime: [" + decoderNames.joinToString(", ") + "]")
-        } catch (e: Exception) {
-            onStatus("lista de decoders fallo: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     /**
      * Encola un frame convertido a ANNEX-B con pts local. Los keyframes
-     * (NAL tipo 19/20/21) llevan VPS/SPS/PPS in-band al inicio — estilo
-     * scrcpy, que funciona en Samsunges de todo pelaje. El IDR se guarda
-     * en Annex-B para re-inyeccion en rotaciones.
+     * llevan VPS/SPS/PPS in-band (estilo scrcpy) y se guardan para
+     * re-inyeccion tras una rotacion de decoder.
      */
     fun feed(data: ByteArray, ts: Long) {
         if (released || !configured) return
@@ -250,18 +204,12 @@ class VideoDecoder(
         val ab = toAnnexB(data) ?: return
         val payload = if (isKey) {
             val b = ByteArrayOutputStream()
-            b.write(annexbCsd)          // params in-band antes del keyframe
+            b.write(annexbCsd)
             b.write(ab)
             b.toByteArray()
         } else ab
 
         val pts = synchronized(lock) { ++frameCounter * 33333L }
-        if (loggedAus < 3 && nal != null) {
-            loggedAus++
-            val kind = if (isKey) "KEY" else "delta"
-            onStatus("AU #$loggedAus: ${data.size}B -> Annex-B ${payload.size}B " +
-                "primer NAL=tipo$nal ($kind${if (isKey) "+params in-band" else ""})")
-        }
         if (isKey) keyAu = payload
 
         synchronized(lock) {
@@ -269,8 +217,7 @@ class VideoDecoder(
             if (pending.size > 90) {
                 pending.removeFirst()
                 drops++
-                if (drops == 1L)
-                    onStatus("decoder: cola de input saturada — descartando frames")
+                if (drops == 1L) onNeedKey()   // saturado: pedir keyframe fresco
             }
             pumpLocked(c)
         }
@@ -312,7 +259,7 @@ class VideoDecoder(
             var i = 23
             for (a in 0 until numArrays) {
                 if (i + 3 > csd.size) return out
-                i++ // array_completeness | nal_type
+                i++
                 val numNalus = ((csd[i].toInt() and 0xFF) shl 8) or (csd[i + 1].toInt() and 0xFF)
                 i += 2
                 for (n in 0 until numNalus) {
@@ -344,9 +291,16 @@ class VideoDecoder(
             val ppsLen = ((csd[i].toInt() and 0xFF) shl 8) or (csd[i + 1].toInt() and 0xFF)
             i += 2
             if (i + ppsLen > csd.size) return null
-            val pps = csd.copyOfRange(i, i + ppsLen)
-            return Pair(sps, pps)
+            return Pair(sps, csd.copyOfRange(i, i + ppsLen))
         } catch (_: Exception) { return null }
+    }
+
+    private fun logRateLimited(msg: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastErrorLog > 5000) {
+            lastErrorLog = now
+            onStatus(msg)
+        }
     }
 
     /** Llena inputs libres; items isCsd van con BUFFER_FLAG_CODEC_CONFIG. */
@@ -356,30 +310,24 @@ class VideoDecoder(
             val p = pending.removeFirst()
             try {
                 val buf = c.getInputBuffer(idx)
-                if (buf == null || p.data.size > buf.capacity()) {
-                    onStatus("decoder: buffer de ${p.data.size}B no cabe (${buf?.capacity() ?: 0}B) — descartado")
-                    continue
-                }
+                if (buf == null || p.data.size > buf.capacity()) continue
                 buf.clear()
                 buf.put(p.data)
                 val flags = if (p.isCsd) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
                 c.queueInputBuffer(idx, 0, p.data.size, p.pts, flags)
                 framesFed++
-                if (p.isCsd) {
-                    onStatus("csd Annex-B via input (CODEC_CONFIG): ${p.data.size}B")
-                } else {
-                    realFed++
-                    if (realFed == 1L)
-                        onStatus("primer AU Annex-B: ${p.data.size}B pts=${p.pts} us (decoder='$activeName')")
-                }
             } catch (e: Exception) {
-                onStatus("decoder error entrada: ${e.message}")
+                logRateLimited("error de entrada al decoder: ${e.message}")
                 return
             }
         }
     }
 
-    /** Watchdog cada 2 s; rota el decoder tras 6 s de out=0 con input fluyendo. */
+    /**
+     * Watchdog silencioso: solo actua si hay input fluyendo y CERO frames
+     * (rotacion de decoder + keyframe fresco). Con video fluyendo, no emite
+     * nada — en produccion la consola no existe mientras hay video.
+     */
     private fun startWatchdog(mySession: Long) {
         Thread {
             var tick = 0
@@ -391,23 +339,14 @@ class VideoDecoder(
                     rotateNext()
                     break
                 }
-                val p: Int
-                val f: Int
-                synchronized(lock) {
-                    p = pending.size
-                    f = freeInputs.size
+                if (framesOut == 0L && framesFed > 0L && tick % 15 == 0) {
+                    logRateLimited("sin frames (in=$framesFed) — esperando keyframe")
                 }
-                onStatus("decoder vivo ('$activeName'): in=$framesFed out=$framesOut " +
-                    "pend=$p libres=$f drops=$drops")
             }
         }.apply { isDaemon = true }.start()
     }
 
-    /**
-     * Rota al siguiente decoder. Cada rotacion pide un IDR FRESCO al server
-     * (recovery del cliente web) y re-inyecta el boot completo al decoder
-     * nuevo — asi la prueba de cada decoder es valida.
-     */
+    /** Fallback: rota al siguiente decoder y pide keyframe fresco. */
     private fun rotateNext() {
         while (true) {
             val next: String? = synchronized(lock) {
@@ -418,12 +357,9 @@ class VideoDecoder(
             }
             if (next == null) {
                 exhausted = true
-                onStatus("decoder: AGOTADOS ${decoderNames.size} decoders en modo Annex-B " +
-                    "[${decoderNames.joinToString(", ")}] — todos con csd+IDR+params in-band")
+                onStatus("error: ningun decoder produce frames — revisa el relay")
                 return
             }
-            onStatus("decoder: '$activeName' consume sin producir — ROTANDO a '$next' " +
-                "+ IDR fresco del server")
             onNeedKey()
             openDecoder(next)
             if (configured) return
