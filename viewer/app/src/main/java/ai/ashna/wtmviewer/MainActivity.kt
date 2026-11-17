@@ -1,42 +1,49 @@
 package ai.ashna.wtmviewer
 
-import android.annotation.SuppressLint
 import android.app.Activity
+import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Bundle
+import android.util.TypedValue
+import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.Button
 import android.content.Context
 import android.content.SharedPreferences
 
 /**
- * Stage 1 (issue #16): skeleton del viewer nativo.
- * - La app pide SOLO: URL del relay + token viewer (64 caracteres)
- * - La app hace el login sola (POST /api/auth) y guarda la sesion
- * - SurfaceView a pantalla completa cuando conecta
- *
- * Nota de politica del proyecto (PrivateIpSweepTest): ningun default con IP
- * RFC 1918 real puede vivir en el repo. El operador escribe su IP al configurar.
+ * Stage 1 (issue #16): viewer nativo.
+ * - La app pide SOLO: URL del relay + token viewer
+ * - La app hace login sola (POST /api/auth) y recibe la cookie
+ * - El video va en SurfaceView a pantalla completa, con un overlay de
+ *   estado SIEMPRE visible encima (lecciones del primer APK: el swap de
+ *   setContentView escondia el estado tras la pantalla negra y ante datos
+ *   malos el usuario no veia nada).
+ * - Ante error: vuelve a la pantalla de config mostrando el motivo.
  */
 class MainActivity : Activity() {
 
     private lateinit var prefs: SharedPreferences
     private var wsClient: WsClient? = null
     private var decoder: VideoDecoder? = null
+    private var overlay: TextView? = null
 
-    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("wtm", Context.MODE_PRIVATE)
-        buildConfigUI()
+        buildConfigUI("")
     }
 
-    private fun buildConfigUI() {
-        val pad = (resources.displayMetrics.density * 12).toInt()
+    private fun buildConfigUI(initialStatus: String) {
+        val pad = dp(12)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad, pad, pad)
@@ -47,21 +54,30 @@ class MainActivity : Activity() {
             setText(prefs.getString("base_url", ""))
         }
         val tokenInput = EditText(this).apply {
-            hint = "Token viewer (64 caracteres, de auth-tokens.json)"
+            hint = "Token viewer (64 caracteres, auth-tokens.json)"
             setText(prefs.getString("viewer_token", ""))
         }
-        val status = TextView(this).apply { text = "Estado: desconectado" }
+        val status = TextView(this).apply {
+            text = initialStatus.ifEmpty { "Estado: desconectado" }
+            setTextColor(if (initialStatus.startsWith("ERROR")) Color.parseColor("#FF6A6A") else Color.WHITE)
+        }
         val connectBtn = Button(this).apply { text = "Conectar" }
 
         connectBtn.setOnClickListener {
             val url = urlInput.text.toString().trim()
             val token = tokenInput.text.toString().trim()
-            if (url.isEmpty() || token.isEmpty()) {
-                status.text = "Estado: falta URL o token"
-                return@setOnClickListener
+            when {
+                url.isEmpty() || token.isEmpty() ->
+                    { status.text = "Estado: falta URL o token"; status.setTextColor(Color.WHITE) }
+                !url.startsWith("https://") ->
+                    { status.text = "Estado: la URL debe ser https://<ip>:8443"; status.setTextColor(Color.WHITE) }
+                token.length != 64 ->
+                    { status.text = "Estado: el token debe tener 64 caracteres (tiene ${token.length})"; status.setTextColor(Color.WHITE) }
+                else -> {
+                    prefs.edit().putString("base_url", url).putString("viewer_token", token).apply()
+                    startStream(url, token)
+                }
             }
-            prefs.edit().putString("base_url", url).putString("viewer_token", token).apply()
-            startStream(url, token, status)
         }
 
         root.addView(label)
@@ -72,31 +88,52 @@ class MainActivity : Activity() {
         setContentView(root)
     }
 
-    private fun startStream(url: String, token: String, status: TextView) {
-        status.text = "Estado: conectando…"
+    private fun startStream(url: String, token: String) {
+        // video abajo, estado SIEMPRE visible arriba
         val surfaceView = SurfaceView(this)
-        val holder = surfaceView.holder
-        holder.setKeepScreenOn(true)
+        val statusOverlay = TextView(this).apply {
+            text = "conectando…"
+            setTextColor(Color.parseColor("#7FFF7F"))
+            typeface = Typeface.MONOSPACE
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setBackgroundColor(0x88000000)
+            val pad = dp(8)
+            setPadding(pad, pad, pad, pad)
+        }
+        overlay = statusOverlay
 
-        holder.addCallback(object : SurfaceHolder.Callback {
+        val frame = FrameLayout(this)
+        frame.addView(
+            surfaceView,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        frame.addView(
+            statusOverlay,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.START
+            ).apply { setMargins(dp(6), dp(6), 0, 0) }
+        )
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        setContentView(frame)
+
+        surfaceView.holder.setKeepScreenOn(true)
+        surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
-                runOnUiThread { status.text = "Estado: superficie lista" }
-                decoder = VideoDecoder(holder.surface) { msg ->
-                    runOnUiThread { status.text = "Estado: $msg" }
-                }
+                decoder = VideoDecoder(holder.surface) { msg -> showStatus(msg) }
                 wsClient = WsClient(
                     baseUrl = url,
                     viewerToken = token,
-                    onConfig = { codec, width, height, csd ->
-                        decoder?.configure(codec, width, height, csd)
-                        runOnUiThread { status.text = "Estado: decodificando ${width}x${height}" }
+                    onConfig = { _, width, height, csd ->
+                        decoder?.configure("hevc", width, height, csd)
+                        showStatus("decodificando ${width}x${height}")
                     },
-                    onFrame = { data, pts ->
-                        decoder?.feed(data, pts)
-                    },
-                    onStatus = { msg ->
-                        runOnUiThread { status.text = "Estado: $msg" }
-                    }
+                    onFrame = { data, pts -> decoder?.feed(data, pts) },
+                    onStatus = { msg -> showStatus(msg) }
                 )
                 wsClient?.connect()
             }
@@ -107,10 +144,22 @@ class MainActivity : Activity() {
                 decoder = null
             }
         })
-
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        setContentView(surfaceView)
     }
+
+    /** Estado al overlay; si es error, vuelve a config con el motivo. */
+    private fun showStatus(msg: String) {
+        runOnUiThread {
+            overlay?.text = msg
+            if (msg.startsWith("error:")) {
+                wsClient?.close()
+                decoder?.release()
+                buildConfigUI("ERROR: ${msg.removePrefix("error: ").removePrefix("error:")}")
+            }
+        }
+    }
+
+    private fun dp(v: Int): Int =
+        (resources.displayMetrics.density * v).toInt()
 
     override fun onDestroy() {
         wsClient?.close()
