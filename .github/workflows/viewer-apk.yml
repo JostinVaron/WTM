@@ -12,7 +12,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Prepare Gradle project
+      - name: SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5'
+      - name: Prepare project
         run: cd viewer && mv build.gradle.root build.gradle && rm -rf src AndroidManifest.xml
       - name: Build debug APK
         run: cd viewer && gradle :app:assembleDebug --no-daemon -Dorg.gradle.jvmargs=-Xmx2g
