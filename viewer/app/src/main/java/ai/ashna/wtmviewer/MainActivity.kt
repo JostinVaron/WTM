@@ -31,17 +31,18 @@ import javax.net.ssl.X509TrustManager
 /**
  * Stage 1 (issue #16): viewer nativo.
  *
- * diag8: la rotacion de diag7 estaba rota (los decoders rotados jamas
- * recibian el IDR — "AGOTADOS" no era un veredicto valido). El fix vive
- * en VideoDecoder.kt: re-inyeccion de IDR capturado + pedido de IDR
- * fresco al server ("t":"idr", el recovery del cliente web) en cada
- * rotacion + log del tipo NAL de los primeros AUs. Aqui solo cambia el
- * cableado del callback onNeedKey y el numero de build.
+ * diag9: el selftest de diag8 demostro que el stack de codecs de la
+ * tablet esta SANO (8/8 loopbacks con frames), y la aritmetica de todas
+ * las sesiones destapo que cada AU llega con 4 bytes de mas tras el NAL
+ * declarado (prefijo de NAL vacio del server) — un AU malformado que el
+ * parser estricto de MediaCodec descarta en silencio y Chrome tolera.
+ * El saneador vive en VideoDecoder.kt; aqui solo cambia el numero de
+ * build. Se conserva toda la telemetria de diag5-8.
  */
 class MainActivity : Activity() {
 
     companion object {
-        const val BUILD = "diag8"
+        const val BUILD = "diag9"
     }
 
     private lateinit var prefs: SharedPreferences
@@ -127,7 +128,6 @@ class MainActivity : Activity() {
         }
         val connectBtn = Button(this).apply { text = "Conectar" }
 
-        // crash capturado en la sesion anterior
         val lastCrash = prefs.getString("last_crash", null)
         if (lastCrash != null) {
             root.addView(TextView(this).apply {
@@ -138,7 +138,6 @@ class MainActivity : Activity() {
             prefs.edit().remove("last_crash").apply()
         }
 
-        // consola PERSISTIDA de la sesion anterior — sobrevive a cualquier muerte
         val lastConsole = prefs.getString("last_console", null)
         if (!lastConsole.isNullOrEmpty()) {
             root.addView(TextView(this).apply {
@@ -193,7 +192,7 @@ class MainActivity : Activity() {
 
     private fun startStream(url: String, token: String) {
         synchronized(logBuf) {
-            logBuf.setLength(0)  // sesion nueva: la persistida previa ya se mostro
+            logBuf.setLength(0)
         }
         persistLog()
         backBtn = null
@@ -237,9 +236,6 @@ class MainActivity : Activity() {
         surfaceView.holder.setKeepScreenOn(true)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
-                // Cerrar la sesion previa ANTES de crear otra: el server es
-                // single-session y la conexion vieja recibia el close 4000
-                // 'replaced' (visto en el log diag5).
                 wsClient?.close()
                 wsClient = null
                 decoder?.release()
@@ -255,7 +251,6 @@ class MainActivity : Activity() {
                     viewerToken = token,
                     onConfig = { codec, width, height, csd ->
                         showStatus("config del server: codec=$codec ${width}x${height} csd=${csd.size}B")
-                        showStatus("csd hex: " + csd.joinToString(" ") { String.format("%02x", it) })
                         decoder?.configure(codec, width, height, csd)
                     },
                     onFrame = { data, pts -> decoder?.feed(data, pts) },
@@ -273,10 +268,6 @@ class MainActivity : Activity() {
         })
     }
 
-    /**
-     * Consola: appendea con timestamp y PERSISTE cada linea a disco.
-     * Error -> no se destruye la consola; solo boton "Volver".
-     */
     private fun showStatus(msg: String) {
         val secs = (System.currentTimeMillis() - t0) / 1000
         val line = "[$secs s] $msg"
@@ -305,7 +296,6 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Boton Volver sobre la consola — la consola nunca se destruye. */
     private fun showBackButton() {
         if (backBtn != null) return
         val b = Button(this).apply { text = "Volver" }

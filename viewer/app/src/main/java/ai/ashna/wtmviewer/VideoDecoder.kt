@@ -10,22 +10,21 @@ import java.nio.ByteBuffer
 /**
  * Decodificador -> Surface directo (issue #16, stage 1).
  *
- * diag8: el log diag7 destapo un bug MIO en la rotacion: los decoders
- * rotados jamas recibian el IDR (OMX.google fue alimentado solo con un
- * delta de 12KB como primer AU real — su out=0 no probaba nada; el
- * "AGOTADOS 3 decoders" era un veredicto invalido). diag8 corrige y
- * completa:
+ * diag9: LA PISTA. Aritmetica de todas las sesiones (diag5-8): cada AU
+ * termina con EXACTAMENTE 4 bytes de mas tras el NAL declarado (707078
+ * vs 707074; 706886 vs 706882; 706983 vs 706979; 707005 vs 707001) — un
+ * prefijo de NAL de longitud 0, residuo del ensamblado en el server.
+ * El selftest de diag8 demostro que el stack de la tablet esta SANO
+ * (HEVC/AVC, 640x480 y 2000x1200, bytebuffer y surface: 8/8 loopbacks
+ * con frames). Un AU malformado es descartado en silencio por parsers
+ * estrictos de MediaCodec (out=0 sin error en los TRES decoders) y
+ * tolerado por Chrome (por eso el cliente web funciona). diag9 SANEA el
+ * AU antes de alimentar el decoder: recorre la estructura NAL por NAL
+ * y descarta todo trailer invalido.
  *
- *  1. El IDR capturado se RE-INYECTA al boot de cada decoder rotado
- *     (boot = csd via input CODEC_CONFIG + VPS/SPS/PPS in-band + IDR,
- *     con KEY_MAX_INPUT_SIZE=4MB para el IDR de ~700KB).
- *  2. Cada rotacion pide un IDR FRESCO al server ("t":"idr" — el mismo
- *     mensaje de recovery que usa el cliente web): elimina la hipotesis
- *     de keyframe cacheado desactualizado frente al stream vivo.
- *  3. Los primeros 3 AUs se loguean con su tipo NAL real (IDR=19/20,
- *     CRA=21): confirma si lo que llega es keyframe de verdad o un
- *     delta grande — el dato que falta para interpretar todo lo demas.
- *  4. pts local monotónico (contador*33333us), como diag7.
+ * Se conserva todo diag8 (b453b90): rotacion valida (boot completo + IDR
+ * re-inyectado por decoder), pedido de IDR fresco ("t":"idr", el recovery
+ * del cliente web), log del tipo NAL real, pts local monotónico.
  */
 class VideoDecoder(
     private val surface: Surface,
@@ -53,6 +52,9 @@ class VideoDecoder(
     private var realFed = 0L
     private var frameCounter = 0L
     private var loggedAus = 0
+    private var sanitized = 0L
+    private var bytesStripped = 0L
+    private var badAus = 0L
     private var configuredAt = 0L
 
     private val freeInputs = ArrayDeque<Int>()
@@ -89,6 +91,9 @@ class VideoDecoder(
             keyAu = null
             loggedAus = 0
             frameCounter = 0
+            sanitized = 0
+            bytesStripped = 0
+            badAus = 0
         }
         lastCodecName = codecName
         lastMime = mime
@@ -96,8 +101,6 @@ class VideoDecoder(
         lastH = height
         lastCsd = csd
         openDecoder(null)
-        // IDR fresco del encoder vivo desde el arranque: el mismo mensaje
-        // de recovery que usa el cliente web cuando pierde decodificacion.
         onStatus("pidiendo IDR fresco al server ({\"t\":\"idr\"} — como el cliente web)")
         onNeedKey()
     }
@@ -120,8 +123,6 @@ class VideoDecoder(
 
             val format = MediaFormat.createVideoFormat(lastMime, lastW, lastH).apply {
                 setByteBuffer("csd-0", ByteBuffer.wrap(lastCsd))
-                // el IDR de pantalla completa pesa ~700KB: los buffers de input
-                // del decoder software tambien deben admitirlo
                 setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 4 * 1024 * 1024)
             }
             val c: MediaCodec
@@ -179,9 +180,6 @@ class VideoDecoder(
             }
             onStatus("decoder activo: '$activeName' — $lastMime ${lastW}x${lastH} csd=${lastCsd.size}B")
 
-            // BOOT del decoder nuevo: csd via input + params in-band + IDR
-            // capturado — el fix del bug de rotacion de diag7 (los decoders
-            // rotados jamas veian un keyframe y su out=0 no probaba nada).
             pending.addLast(Pending(lastCsd, 0L, true))
             val paramsAu = paramsAuFromCsd()
             if (paramsAu != null) {
@@ -214,26 +212,68 @@ class VideoDecoder(
     }
 
     /**
-     * Encola un frame con pts LOCAL monotónico (contador*33333us): el ts
-     * del server es epoch-µs (~1.79e15) y el cliente web JAMAS alimenta
-     * epoch a WebCodecs — hay decoders hw que se ahogan con valores tan
-     * grandes. Los primeros 3 AUs se loguean con su tipo NAL real.
+     * SANEADOR (diag9): recorre el AU NAL por NAL y corta en el primer
+     * prefijo invalido (longitud 0 o incompleta). El server deja un
+     * trailer de 4 bytes (prefijo de NAL vacio) en CADA AU — la causa mas
+     * probable del out=0 silencioso en parsers estrictos de MediaCodec.
+     * Devuelve null si el AU no tiene ni un NAL resolvible.
+     */
+    private fun sanitizeAu(au: ByteArray): ByteArray? {
+        var i = 0
+        var end = 0
+        var nals = 0
+        while (i + 4 <= au.size) {
+            val len = ((au[i].toInt() and 0xFF) shl 24) or ((au[i + 1].toInt() and 0xFF) shl 16) or
+                ((au[i + 2].toInt() and 0xFF) shl 8) or (au[i + 3].toInt() and 0xFF)
+            if (len <= 0 || i + 4 + len > au.size) break
+            i += 4 + len
+            end = i
+            nals++
+        }
+        if (end == au.size) return au                      // AU limpio
+        if (end == 0) return null                          // nada resolvible
+        return au.copyOfRange(0, end)
+    }
+
+    /**
+     * Encola un frame saneado con pts LOCAL monotónico. Los primeros 3
+     * AUs se loguean con su tipo NAL real (IDR=19/20, CRA=21).
      */
     fun feed(data: ByteArray, ts: Long) {
         if (released || !configured) return
         val c = codec ?: return
+
+        val clean = sanitizeAu(data)
+        if (clean == null) {
+            badAus++
+            if (badAus <= 3)
+                onStatus("AU descartado: sin NAL resolvible (${data.size}B)")
+            return
+        }
+        if (clean.size != data.size) {
+            sanitized++
+            bytesStripped += (data.size - clean.size)
+            if (sanitized == 1L) {
+                onStatus("AU SANEADO: ${data.size}B -> ${clean.size}B — descartado " +
+                    "trailer invalido de ${data.size - clean.size}B (prefijo de NAL vacio " +
+                    "del server; la causa probable del silencio del decoder)")
+            } else if (sanitized % 300 == 0L) {
+                onStatus("saneados: $sanitized AUs ($bytesStripped B de trailers descartados)")
+            }
+        }
+
         val pts = synchronized(lock) { ++frameCounter * 33333L }
-        val nal = firstNalType(data)
+        val nal = firstNalType(clean)
         if (loggedAus < 3 && nal != null) {
             loggedAus++
             val kind = if (KEY_NALS.contains(nal)) "KEY" else "delta"
-            onStatus("AU #$loggedAus: ${data.size}B primer NAL=tipo$nal ($kind)")
+            onStatus("AU #$loggedAus: ${clean.size}B primer NAL=tipo$nal ($kind)")
         }
         if (nal != null && KEY_NALS.contains(nal)) {
-            keyAu = data  // siempre el keyframe mas fresco, para re-inyeccion
+            keyAu = clean
         }
         synchronized(lock) {
-            pending.addLast(Pending(data, pts, false))
+            pending.addLast(Pending(clean, pts, false))
             if (pending.size > 90) {
                 pending.removeFirst()
                 drops++
@@ -278,7 +318,7 @@ class VideoDecoder(
             var i = 23
             for (a in 0 until numArrays) {
                 if (i + 3 > csd.size) return out
-                i++ // array_completeness | nal_type
+                i++
                 val numNalus = ((csd[i].toInt() and 0xFF) shl 8) or (csd[i + 1].toInt() and 0xFF)
                 i += 2
                 for (n in 0 until numNalus) {
@@ -334,7 +374,7 @@ class VideoDecoder(
                 tick++
                 if (framesOut == 0L && framesFed > 0L && !exhausted && tick >= SILENCE_TICKS) {
                     rotateNext()
-                    break  // el watchdog del decoder nuevo toma el relevo
+                    break
                 }
                 val p: Int
                 val f: Int
@@ -342,7 +382,8 @@ class VideoDecoder(
                     p = pending.size
                     f = freeInputs.size
                 }
-                onStatus("decoder vivo ('$activeName'): in=$framesFed out=$framesOut pend=$p libres=$f drops=$drops")
+                onStatus("decoder vivo ('$activeName'): in=$framesFed out=$framesOut " +
+                    "pend=$p libres=$f drops=$drops saneados=$sanitized")
             }
         }.apply { isDaemon = true }.start()
     }
@@ -350,8 +391,7 @@ class VideoDecoder(
     /**
      * Rota al siguiente decoder. Cada rotacion pide un IDR FRESCO al server
      * (recovery del cliente web) y re-inyecta el boot completo al decoder
-     * nuevo — asi la prueba de cada decoder es valida (diag7 rotaba en frio
-     * y el veredicto "AGOTADOS" no probaba nada).
+     * nuevo — asi la prueba de cada decoder es valida.
      */
     private fun rotateNext() {
         while (true) {
@@ -364,7 +404,7 @@ class VideoDecoder(
             if (next == null) {
                 exhausted = true
                 onStatus("decoder: AGOTADOS ${decoderNames.size} decoders " +
-                    "[${decoderNames.joinToString(", ")}] — todos recibieron csd+IDR y out=0")
+                    "[${decoderNames.joinToString(", ")}] — todos recibieron csd+IDR saneados y out=0")
                 return
             }
             onStatus("decoder: '$activeName' consume sin producir — ROTANDO a '$next' " +
