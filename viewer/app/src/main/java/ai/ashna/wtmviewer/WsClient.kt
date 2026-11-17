@@ -4,33 +4,50 @@ import org.json.JSONObject
 import java.io.DataInputStream
 import java.io.IOException
 import java.net.URI
+import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLSocketFactory
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import kotlin.concurrent.thread
 
 /**
  * WebSocket mínimo (RFC 6455) sobre socket TLS para hablar con el relay WTM.
  * Mismo protocolo que el cliente web (server.py / hevc.py):
- * - al abrir: 6 mensajes de sync de reloj ({t:"sync", c:...}), luego NUNCA
- *   responder a los sync del servidor (evita bucle de eco);
- * - config JSON: codec + width/height + description (hvcC en base64);
- * - frames: mensajes binarios AVCC (4-byte NAL length prefix);
- * - heartbeat: el servidor manda "h" como texto — se ignora (el TCP lo mantiene).
+ *
+ * 1. LOGIN: POST /api/auth con {"token": <viewer>} y Origin same-site —
+ *    exactamente lo que hace el /login del navegador. El relay responde con
+ *    la cookie de sesión (rol viewer); la app la guarda y la usa sola.
+ *    (Así nadie tiene que extraer cookies de Chrome a mano.)
+ * 2. WEBSOCKET: handshake con la cookie; al abrir, 6 mensajes de sync de
+ *    reloj ({t:"sync", c:...}) y luego NUNCA responder a los sync del
+ *    servidor (evita bucle de eco).
+ * 3. VIDEO: config JSON (codec + width/height + hvcC base64) y frames
+ *    binarios AVCC (4-byte NAL length prefix).
+ * 4. HEARTBEAT: el servidor manda "h" como texto — se ignora (el TCP lo mantiene).
  */
 class WsClient(
     private val baseUrl: String,
-    private val sessionCookie: String,
+    private val viewerToken: String,
     private val onConfig: (codec: String, width: Int, height: Int, csd: ByteArray) -> Unit,
     private val onFrame: (data: ByteArray, pts: Long) -> Unit,
     private val onStatus: (String) -> Unit
 ) {
-    private var socket: javax.net.ssl.SSLSocket? = null
+    private var socket: SSLSocket? = null
     private val closed = AtomicBoolean(false)
+    private var sessionCookie: String = ""
 
     fun connect() {
         thread(name = "wtm-ws") {
             try {
+                login()
                 handshake()
-                // sincronización de reloj inicial: 6 eco-muestras como el web
+                // sincronización de reloj inicial: 6 muestras como el cliente web
                 for (i in 0 until 6) {
                     sendJson("""{"t":"sync","c":${System.currentTimeMillis()}}""")
                     Thread.sleep(120)
@@ -42,27 +59,67 @@ class WsClient(
         }
     }
 
+    /** Cert self-signed del relay: identidad verificada por fingerprint fuera de banda. */
+    private fun trustAllFactory(): SSLSocketFactory {
+        val ctx = SSLContext.getInstance("TLS")
+        ctx.init(null, arrayOf<TrustManager>(object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+        }), SecureRandom())
+        return ctx.socketFactory
+    }
+
+    /**
+     * Login con el token viewer: mismo POST /api/auth que hace el navegador.
+     * El relay responde 200 + Set-Cookie con la sesión viewer. Si el token
+     * esta mal da 401; tras varios intentos fallidos el relay throttlea (429).
+     */
+    private fun login() {
+        val uri = URI(baseUrl)
+        val host = uri.host ?: throw IOException("URL sin host")
+        val url = URL(baseUrl.trimEnd('/') + "/api/auth")
+        val conn = url.openConnection() as HttpsURLConnection
+        conn.sslSocketFactory = trustAllFactory()
+        conn.requestMethod = "POST"
+        conn.doOutput = true
+        conn.connectTimeout = 8000
+        conn.readTimeout = 8000
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("Origin", "https://$host")
+        val body = """{"token":"$viewerToken"}"""
+        conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        val code = conn.responseCode
+        if (code != 200) {
+            conn.disconnect()
+            val motivo = when (code) {
+                401 -> "token viewer incorrecto"
+                403 -> "Origin rechazado — la URL debe ser https://<ip>:8443 exacta"
+                429 -> "demasiados intentos fallidos: el relay te throttleo, espera un minuto"
+                else -> "HTTP $code"
+            }
+            throw IOException("login fallido: $motivo")
+        }
+        val setCookie = conn.getHeaderField("Set-Cookie")
+        conn.disconnect()
+        if (setCookie.isNullOrEmpty()) {
+            throw IOException("login OK pero el relay no mando cookie — reportar")
+        }
+        sessionCookie = setCookie.split(";").first().trim()
+        onStatus("login OK — sesion viewer activa")
+    }
+
     private fun handshake() {
         val uri = URI(baseUrl)
         val host = uri.host ?: throw IOException("URL sin host")
         val port = uri.port.takeIf { it != -1 } ?: 8443
 
-        // Cert self-signed del relay: identidad verificada por fingerprint
-        // SHA-256 comparado fuera de banda (mismo modelo que el cliente web).
-        val factory = javax.net.ssl.SSLContext.getInstance("TLS").apply {
-            init(null, arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
-                override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
-                override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
-                override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
-            }), java.security.SecureRandom())
-        }.socketFactory
-
-        val raw = factory.createSocket(host, port) as javax.net.ssl.SSLSocket
+        val raw = trustAllFactory().createSocket(host, port) as SSLSocket
         raw.startHandshake()
         socket = raw
 
         val key = java.util.Base64.getEncoder().encodeToString(ByteArray(16).also {
-            java.security.SecureRandom().nextBytes(it)
+            SecureRandom().nextBytes(it)
         })
         val req = "GET /ws HTTP/1.1\r\n" +
             "Host: $host:$port\r\n" +
@@ -81,7 +138,7 @@ class WsClient(
         val input = raw.getInputStream()
         val statusLine = readLine(input)
         if (!statusLine.contains("101")) {
-            throw IOException("handshake rechazado: $statusLine — revisa cookie/Origin/Host allowlist")
+            throw IOException("handshake rechazado: $statusLine — cookie/Origin/Host allowlist")
         }
         while (true) {
             val line = readLine(input)
@@ -123,7 +180,7 @@ class WsClient(
             dis.readFully(payload)
 
             when (opcode) {
-                0x1 -> { // texto
+                0x1 -> {
                     val text = String(payload, Charsets.UTF_8)
                     if (text == "h") continue // heartbeat del servidor: ignorar
                     val m = JSONObject(text)
@@ -136,7 +193,6 @@ class WsClient(
                         }
                         "sync" -> {
                             // eco de reloj del servidor: medir offset, NO responder
-                            // (responder crearía un bucle infinito de ecos)
                         }
                     }
                 }
