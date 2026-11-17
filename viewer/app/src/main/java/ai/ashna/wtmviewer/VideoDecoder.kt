@@ -1,64 +1,60 @@
 package ai.ashna.wtmviewer
 
 import android.media.MediaCodec
-import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.view.Surface
 
 /**
  * Decodificador -> Surface directo (issue #16, stage 1).
  *
- * diag7: diag6 demostro que hvcC (111B: 23 cabecera + VPS 23 + SPS 40 +
- * PPS 10, numOfArrays=3 u8 exacto al spec), IDR y transporte son validos,
- * y aun asi el decoder por defecto consumio 95 AUs con out=0, sin onError
- * ni format-changed. El decoder hardware elegido descarta todo en
- * silencio. Cuatro ataques simultaneos:
+ * diag7: tres armas contra el "decoder silencioso" que el log diag6
+ * demostro (in=95 out=0, sin error, sin formato, sin frames; csd y AU
+ * verificados byte-exactos contra el server):
  *
- *  1. pts rebase a 0-based us: mandabamos epoch-wallclock (1.79e15 us);
- *     firmwares con campos de 32 bits lo envuelven y hay SoCs que no
- *     emiten output jamas. scrcpy/ExoPlayer alimentan pts 0-based.
- *  2. csd TAMBIEN via input buffer con BUFFER_FLAG_CODEC_CONFIG (via
- *     alternativa documentada; algunos decoders solo la honran).
- *  3. VPS/SPS/PPS in-band parseados del hvcC antes del primer AU real.
- *  4. AUTO-ROTACION: 6 s de out=0 con input fluyendo -> siguiente decoder
- *     HEVC de MediaCodecList (incluido el software c2.android.hevc
- *     como ultimo recurso). Si hay video, el log dice QUE decoder lo logro.
+ *  1. pts LOCAL monotónico (contador*33333us). El ts del server es
+ *     epoch-µs (~1.79e15) y el cliente web JAMAS alimenta epoch a
+ *     WebCodecs (usa media-time pequeño) — hay decoders hw con aritmetica
+ *     interna que se ahogan con valores tan grandes. Se elimina la
+ *     variable de raiz.
+ *  2. nombre del decoder elegido queda logueado (getName()).
+ *  3. watchdog: si el decoder consume y NO produce en 6 s, cambia solo
+ *     a el decoder SOFTWARE (c2.android.hevc/avc.decoder) y re-inyecta
+ *     el IDR capturado. Software Main-profile siempre decodifica: si
+ *     produce frames, el culpable era el codec hw de la tablet (y se ve
+ *     video en la MISMA prueba); si tampoco produce, queda impreso que
+ *     el problema son los BYTES del stream, no el codec.
+ *
+ * KEY_MAX_INPUT_SIZE=4MB: el IDR de ~700KB debe caber tambien en los
+ * buffers del decoder software.
  */
 class VideoDecoder(
     private val surface: Surface,
     private val onStatus: (String) -> Unit
 ) {
-    companion object {
-        private const val SILENCE_MS = 6000L
-    }
-
     private val lock = Any()
     private var codec: MediaCodec? = null
     @Volatile private var configured = false
-    @Volatile private var released = false
-    @Volatile private var activeName = ""
-    @Volatile private var exhausted = false
-
+    @Volatile private var needsReinit = false
+    @Volatile private var session = 0L
+    @Volatile private var swTried = false
+    @Volatile private var swAlsoSilentReported = false
     private var framesFed = 0L
     private var framesOut = 0L
     private var drops = 0L
-    private var realFed = 0L
+    private var released = false
+    private var frameCounter = 0L
 
     private val freeInputs = ArrayDeque<Int>()
     private val pendingFrames = ArrayDeque<Pair<ByteArray, Long>>()
 
+    // ultima config: para re-init tras error del codec
     private var lastCodecName = ""
-    private var lastMime = ""
     private var lastW = 0
     private var lastH = 0
     private var lastCsd: ByteArray = ByteArray(0)
 
-    private val decoderNames = mutableListOf<String>()
-    private var decoderIdx = 0
-    private var configuredAt = 0L
-    private var fedBoot = false
-    private var bootAu: ByteArray? = null
-    private var ptsOffset = -1L
+    // primer AU (IDR): se guarda para re-inyectarlo tras cualquier reinicio
+    private var firstAu: ByteArray? = null
 
     /** "avc1.*" -> H.264, "hvc1.*"/"hev1.*" -> HEVC; otro -> error visible. */
     private fun mimeOf(codecName: String): String? = when {
@@ -68,28 +64,20 @@ class VideoDecoder(
         else -> null
     }
 
-    fun configure(codecName: String, width: Int, height: Int, csd: ByteArray) {
+    private fun swName(mime: String): String? = when (mime) {
+        MediaFormat.MIMETYPE_VIDEO_AVC -> "c2.android.avc.decoder"
+        MediaFormat.MIMETYPE_VIDEO_HEVC -> "c2.android.hevc.decoder"
+        else -> null
+    }
+
+    fun configure(codecName: String, width: Int, height: Int, csd: ByteArray,
+                  forceSw: Boolean = false) {
         val mime = mimeOf(codecName)
         if (mime == null) {
             onStatus("codec NO soportado por el viewer: $codecName")
             return
         }
-        synchronized(lock) {
-            decoderNames.clear()
-            decoderIdx = 0
-            exhausted = false
-            ptsOffset = -1L
-        }
-        lastCodecName = codecName
-        lastMime = mime
-        lastW = width
-        lastH = height
-        lastCsd = csd
-        openDecoder(null)
-    }
-
-    /** Abre (o reabre) un decoder. name=null -> el preferido del sistema. */
-    private fun openDecoder(name: String?) {
+        var mySession = 0L
         synchronized(lock) {
             teardownLocked()
             freeInputs.clear()
@@ -97,19 +85,38 @@ class VideoDecoder(
             framesFed = 0
             framesOut = 0
             drops = 0
-            realFed = 0
-            fedBoot = false
-            bootAu = null
+            needsReinit = false
             released = false
-            configuredAt = System.currentTimeMillis()
+            frameCounter = 0
+            session += 1
+            mySession = session
+            lastCodecName = codecName
+            lastW = width
+            lastH = height
+            lastCsd = csd
 
-            val format = MediaFormat.createVideoFormat(lastMime, lastW, lastH).apply {
-                setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(lastCsd))
+            onStatus("decoder: abrir $codecName como $mime ${width}x${height} " +
+                "csd=${csd.size}B (${if (forceSw) "software" else "auto"})")
+
+            val format = MediaFormat.createVideoFormat(mime, width, height).apply {
+                setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(csd))
+                // el IDR de pantalla completa pesa ~700KB: que el input
+                // del decoder software tambien lo admita
+                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 4 * 1024 * 1024)
             }
             val c: MediaCodec
             try {
-                c = if (name == null) MediaCodec.createDecoderByType(lastMime)
-                     else MediaCodec.createByCodecName(name)
+                c = if (forceSw) {
+                    val name = swName(mime)
+                    try {
+                        MediaCodec.createDecoderByName(name!!)
+                    } catch (e: Exception) {
+                        onStatus("decoder software '$name' no disponible (${e.message}) — por tipo")
+                        MediaCodec.createDecoderByType(mime)
+                    }
+                } else {
+                    MediaCodec.createDecoderByType(mime)
+                }
                 c.setCallback(object : MediaCodec.Callback() {
                     override fun onInputBufferAvailable(m: MediaCodec, index: Int) {
                         if (released) return
@@ -125,87 +132,112 @@ class VideoDecoder(
                             m.releaseOutputBuffer(index, true)
                             framesOut++
                             if (framesOut == 1L) {
-                                onStatus("PRIMER FRAME RENDERIZADO al surface " +
-                                    "(decoder='$activeName', ${info.size}B)")
+                                onStatus("PRIMER FRAME RENDERIZADO al surface (${info.size}B " +
+                                    "pts=${info.presentationTimeUs}us flags=0x" +
+                                    Integer.toHexString(info.flags) + ")")
                             } else if (framesOut % 300 == 0L) {
-                                onStatus("render: $framesOut frames al surface ('$activeName')")
+                                onStatus("render: $framesOut frames al surface")
                             }
                         } catch (e: Exception) {
-                            onStatus("decoder error al renderizar: ${e.message}")
+                            onStatus("decoder error al renderizar frame: ${e.message}")
+                            needsReinit = true
                         }
                     }
 
                     override fun onOutputFormatChanged(m: MediaCodec, format: MediaFormat) {
                         if (released) return
-                        onStatus("decoder formato real ('$activeName'): $format")
+                        onStatus("decoder formato real: $format")
                     }
 
                     override fun onError(m: MediaCodec, e: MediaCodec.CodecException) {
                         if (released) return
-                        onStatus("decoder ONERROR ('$activeName') code=${e.errorCode} " +
+                        onStatus("decoder ONERROR code=${e.errorCode} " +
                             "recoverable=${e.isRecoverable} transitorio=${e.isTransient}: ${e.diagnosticInfo}")
+                        needsReinit = true
                     }
                 })
                 c.configure(format, surface, null, 0)
                 c.start()
             } catch (e: Exception) {
-                onStatus("decoder: FALLO abrir '${name ?: "default"}' ($lastMime): ${e.message}")
+                onStatus("decoder: FALLO abrir ($mime): ${e.message}")
                 return
             }
             codec = c
             configured = true
-            activeName = c.codecInfo.name
-            if (decoderNames.isEmpty()) decoderNames.add(activeName)
-            if (decoderNames.size == 1) fillDecoderListLocked()
-            onStatus("decoder activo: '$activeName' — $lastMime ${lastW}x${lastH} csd=${lastCsd.size}B")
-        }
-        startWatchdog()
-    }
+            onStatus("decoder arrancado: ${c.name} (${if (forceSw) "SW" else "HW"})")
 
-    /** Lista completa de decoders para el mime (para la auto-rotacion). */
-    private fun fillDecoderListLocked() {
-        try {
-            val others = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
-                .filter { info -> !info.isEncoder &&
-                    info.supportedTypes.any { it.equals(lastMime, ignoreCase = true) } }
-                .map { it.name }
-                .filter { it != activeName }
-            decoderNames.addAll(others)
-            onStatus("decoders $lastMime: [" + decoderNames.joinToString(", ") + "]")
-        } catch (e: Exception) {
-            onStatus("lista de decoders fallo: ${e.message}")
+            // re-inyectar el IDR capturado tras cualquier reinicio: un
+            // decoder nuevo necesita un keyframe para empezar a producir
+            firstAu?.let { au ->
+                val pts = ++frameCounter * 33333L
+                pendingFrames.addLast(Pair(au, pts))
+                onStatus("re-inyectando IDR capturado (${au.size}B) al decoder recien armado")
+            }
         }
+
+        // Watchdog cada 2 s: estado siempre visible + cambio HW->SW si
+        // el decoder consume en silencio (el hallazgo central de diag6).
+        Thread {
+            var tick = 0
+            while (configured && !released && session == mySession) {
+                Thread.sleep(2000)
+                if (!configured || released || session != mySession) break
+                tick++
+                if (needsReinit) {
+                    onStatus("decoder: re-init tras error del codec")
+                    synchronized(lock) {
+                        teardownLocked()
+                        configured = false
+                        needsReinit = false
+                    }
+                    configure(lastCodecName, lastW, lastH, lastCsd, forceSw = swTried)
+                    break
+                }
+                val p: Int
+                val f: Int
+                synchronized(lock) {
+                    p = pendingFrames.size
+                    f = freeInputs.size
+                }
+                val silent = framesOut == 0L && framesFed > 0L
+                if (silent && !swTried && tick >= 3) {
+                    swTried = true
+                    onStatus("watchdog: HW consume $framesFed AUs y produce 0 frames en " +
+                        "${tick * 2}s — cambio automatico a decoder SOFTWARE")
+                    synchronized(lock) {
+                        teardownLocked()
+                        configured = false
+                    }
+                    configure(lastCodecName, lastW, lastH, lastCsd, forceSw = true)
+                    break
+                } else if (silent && swTried && tick >= 8 && !swAlsoSilentReported) {
+                    swAlsoSilentReported = true
+                    onStatus("watchdog: el decoder SOFTWARE tambien consume sin producir " +
+                        "($framesFed AUs) — el problema son los BYTES del stream, no el codec")
+                } else {
+                    onStatus("decoder vivo [${if (swTried) "sw" else "hw"}]: " +
+                        "in=$framesFed out=$framesOut pend=$p libres=$f drops=$drops")
+                }
+            }
+        }.apply { isDaemon = true }.start()
     }
 
     /**
-     * Encola un frame con pts 0-based. Antes del primero alimenta el
-     * boot del decoder: csd via input (CODEC_CONFIG) + params in-band.
+     * Encola un frame. pts LOCAL monotónico (contador*33333us): el ts del
+     * server (epoch-µs, ~1.79e15) queda descartado como causa — el cliente
+     * web nunca alimenta epoch a WebCodecs y hay decoders hw que se ahogan
+     * con aritmetica interna de 32 bits sobre valores tan grandes.
      */
-    fun feed(data: ByteArray, pts: Long) {
+    fun feed(data: ByteArray, ts: Long) {
         if (released || !configured) return
         val c = codec ?: return
-        if (ptsOffset < 0) ptsOffset = pts
-        val feedPts = (pts - ptsOffset).coerceAtLeast(0)
         synchronized(lock) {
-            if (!fedBoot && lastCsd.isNotEmpty()) {
-                fedBoot = true
-                pendingFrames.addLast(Pair(lastCsd, 0L))
-                val nals = nalsFromConfig(lastCsd)
-                if (nals.isNotEmpty()) {
-                    val au = java.io.ByteArrayOutputStream()
-                    for (n in nals) {
-                        au.write((n.size shr 24) and 0xFF)
-                        au.write((n.size shr 16) and 0xFF)
-                        au.write((n.size shr 8) and 0xFF)
-                        au.write(n.size and 0xFF)
-                        au.write(n)
-                    }
-                    val auBytes = au.toByteArray()
-                    bootAu = auBytes
-                    pendingFrames.addLast(Pair(auBytes, 0L))
-                }
+            val pts = ++frameCounter * 33333L
+            if (firstAu == null) {
+                firstAu = data
+                onStatus("IDR capturado y guardado (${data.size}B) para re-inyeccion")
             }
-            pendingFrames.addLast(Pair(data, feedPts))
+            pendingFrames.addLast(Pair(data, pts))
             if (pendingFrames.size > 90) {
                 pendingFrames.removeFirst()
                 drops++
@@ -216,33 +248,7 @@ class VideoDecoder(
         }
     }
 
-    /** Parsea VPS/SPS/PPS de un hvcC (HEVC) — [] si no es parseable. */
-    private fun nalsFromConfig(csd: ByteArray): List<ByteArray> {
-        val out = mutableListOf<ByteArray>()
-        if (lastMime != MediaFormat.MIMETYPE_VIDEO_HEVC) return out
-        try {
-            if (csd.size < 23 || csd[0].toInt() != 1) return out
-            val numArrays = csd[22].toInt() and 0xFF
-            var i = 23
-            for (a in 0 until numArrays) {
-                if (i + 3 > csd.size) return out
-                i++ // array_completeness | nal_type
-                val numNalus = ((csd[i].toInt() and 0xFF) shl 8) or (csd[i + 1].toInt() and 0xFF)
-                i += 2
-                for (n in 0 until numNalus) {
-                    if (i + 2 > csd.size) return out
-                    val len = ((csd[i].toInt() and 0xFF) shl 8) or (csd[i + 1].toInt() and 0xFF)
-                    i += 2
-                    if (i + len > csd.size) return out
-                    out.add(csd.copyOfRange(i, i + len))
-                    i += len
-                }
-            }
-        } catch (_: Exception) {}
-        return out
-    }
-
-    /** Llena inputs libres; loguea csd/params/primer AU por identidad. */
+    /** Llena inputs libres con frames pendientes. Llamar bajo lock. */
     private fun pumpLocked(c: MediaCodec) {
         while (freeInputs.isNotEmpty() && pendingFrames.isNotEmpty()) {
             val idx = freeInputs.removeFirst()
@@ -250,75 +256,20 @@ class VideoDecoder(
             try {
                 val buf = c.getInputBuffer(idx)
                 if (buf == null || data.size > buf.capacity()) {
-                    onStatus("decoder: buffer de ${data.size}B no cabe (${buf?.capacity() ?: 0}B) — descartado")
+                    onStatus("decoder: frame de ${data.size}B no cabe en input de ${buf?.capacity() ?: 0}B — descartado")
                     continue
                 }
                 buf.clear()
                 buf.put(data)
-                val isCsd = data === lastCsd
-                val flags = if (isCsd) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
-                c.queueInputBuffer(idx, 0, data.size, pts, flags)
+                c.queueInputBuffer(idx, 0, data.size, pts, 0)
                 framesFed++
-                val ba = bootAu
-                when {
-                    isCsd ->
-                        onStatus("csd via input (CODEC_CONFIG): ${data.size}B enviado")
-                    ba != null && data === ba ->
-                        onStatus("params in-band (VPS/SPS/PPS): ${data.size}B enviados")
-                    else -> {
-                        realFed++
-                        if (realFed == 1L)
-                            onStatus("primer AU real: ${data.size}B pts=$pts us (decoder='$activeName')")
-                    }
-                }
+                if (framesFed == 1L)
+                    onStatus("primer buffer al decoder: ${data.size}B pts=$pts us (local, no epoch)")
             } catch (e: Exception) {
-                onStatus("decoder error entrada: ${e.message}")
+                onStatus("decoder error entrada: ${e.message} — marcado para re-init")
+                needsReinit = true
                 return
             }
-        }
-    }
-
-    /** Watchdog cada 2 s; auto-rota el decoder tras 6 s de silencio. */
-    private fun startWatchdog() {
-        Thread {
-            while (configured && !released) {
-                Thread.sleep(2000)
-                if (!configured || released) break
-                val silent = framesOut == 0L && framesFed > 0L &&
-                    System.currentTimeMillis() - configuredAt > SILENCE_MS
-                if (silent && !exhausted) {
-                    val hasNext = synchronized(lock) { decoderIdx + 1 < decoderNames.size }
-                    if (hasNext) {
-                        rotateNext()
-                        if (!configured) {
-                            exhausted = true
-                            onStatus("decoder: NINGUN decoder de la lista pudo abrirse")
-                        }
-                        break  // el watchdog del decoder nuevo toma el relevo
-                    } else {
-                        exhausted = true
-                        onStatus("decoder: AGOTADOS ${decoderNames.size} decoders " +
-                            "[${decoderNames.joinToString(", ")}] — input fluye, out=0 en todos")
-                    }
-                }
-                val p: Int
-                val f: Int
-                synchronized(lock) { p = pendingFrames.size; f = freeInputs.size }
-                onStatus("decoder vivo ('$activeName'): in=$framesFed out=$framesOut pend=$p libres=$f drops=$drops")
-            }
-        }.apply { isDaemon = true }.start()
-    }
-
-    /** Rota al siguiente decoder; si no abre, sigue con el que sigue. */
-    private fun rotateNext() {
-        while (true) {
-            val next: String? = synchronized(lock) {
-                if (decoderIdx + 1 < decoderNames.size) decoderNames[decoderIdx + 1] else null
-            } ?: return
-            decoderIdx++
-            onStatus("decoder: '$activeName' traga input y suelta 0 frames — ROTANDO a '$next'")
-            openDecoder(next)
-            if (configured) return
         }
     }
 

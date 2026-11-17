@@ -31,13 +31,13 @@ import javax.net.ssl.X509TrustManager
 /**
  * Stage 1 (issue #16): viewer nativo.
  *
- * diag7: el log diag6 demostro que hvcC, IDR y transporte son validos
- * (aritmetica de bytes: 23B cabecera + VPS 23 + SPS 40 + PPS 10 = 111B
- * exactos) y que el decoder por defecto consume 95 AUs y suelta 0 frames
- * SIN error. El fallo es del decoder elegido por la tablet, no del
- * protocolo. Los cambios de motor viven en VideoDecoder.kt (pts 0-based,
- * csd via input, params in-band, auto-rotacion de decoders); aqui solo
- * cambia el numero de build.
+ * diag7: el log diag6 acorralo el bug por completo: csd (hvcC con VPS/SPS/
+ * PPS) byte-exacto, AU byte-exacto (IDR tipo 20, sin cifrado), decoder
+ * consume 95 AUs y produce CERO frames sin error. Quedan dos sospechosos
+ * y el VideoDecoder los ataca a ambos: pts local monotonico (el epoch-µs
+ * ~1.79e15 nunca se alimenta en el cliente web) y cambio automatico al
+ * decoder software si el hardware consume en silencio, re-inyectando el
+ * IDR guardado. Esta pantalla mantiene toda la telemetria de diag5/6.
  */
 class MainActivity : Activity() {
 
@@ -240,8 +240,7 @@ class MainActivity : Activity() {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 // Cerrar la sesion previa ANTES de crear otra: el server es
                 // single-session y la conexion vieja recibia el close 4000
-                // 'replaced' (visto en el log diag5) — la app se kickeaba
-                // a si misma al volver de background.
+                // 'replaced' (visto en el log diag5).
                 wsClient?.close()
                 wsClient = null
                 decoder?.release()
@@ -253,8 +252,6 @@ class MainActivity : Activity() {
                     viewerToken = token,
                     onConfig = { codec, width, height, csd ->
                         showStatus("config del server: codec=$codec ${width}x${height} csd=${csd.size}B")
-                        // hvcC completo en hex: permite verificar que los
-                        // VPS/SPS/PPS embebidos matchean el stream real
                         showStatus("csd hex: " + csd.joinToString(" ") { String.format("%02x", it) })
                         decoder?.configure(codec, width, height, csd)
                     },
