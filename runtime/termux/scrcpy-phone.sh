@@ -13,6 +13,14 @@ SERVER_JAR="$PWD/jvm/scrcpy-server"
 MAX_SIZE="${MAX_SIZE:-2000}"
 BITRATE="${BITRATE:-12000000}"
 FPS="${FPS:-60}"
+# Intervalo de keyframes en segundos (perf3, 2026-11-17): los IDR de ~700 KB a
+# 35 Mbps son el ~90% del tráfico en ráfagas — el log perf3 mostro un atasco del
+# encoder con lat 157 ms en una escena pesada. GOP mas largo = menos picos de
+# bitrate y encoder con margen. IFRAME_INTERVAL=2 en server.env lo cambia SIN
+# tocar codigo; default 1 = comportamiento historico. Recovery: la app pide
+# IDR fresco ("t":"idr") al descartar, asi que un GOP largo no penaliza la
+# recuperacion tras atascos.
+IFRAME_INTERVAL="${IFRAME_INTERVAL:-1}"
 SCID="${SCID:-7777}"
 SCRCPY_PORT="${SCRCPY_PORT:-1234}"
 
@@ -107,7 +115,7 @@ case "$VIDEO_CODEC" in
   h265) CODEC_OPT="video_codec=h265" ;;   # DEFAULT desde v0.3.0 (issue #4)
   *)    log "VIDEO_CODEC inválido: '$VIDEO_CODEC' (usa h264 o h265)"; exit 1 ;;
 esac
-log "arrancando scrcpy-server (${MAX_SIZE}px, ${BITRATE} bps, ${FPS}fps${NEW_DISPLAY:+", display virtual ${NEW_DISPLAY}"}, codec ${VIDEO_CODEC})..."
+log "arrancando scrcpy-server (${MAX_SIZE}px, ${BITRATE} bps, ${FPS}fps, i-frame cada ${IFRAME_INTERVAL}s${NEW_DISPLAY:+", display virtual ${NEW_DISPLAY}"}, codec ${VIDEO_CODEC})..."
 # IMPORTANTE: usar 'env CLASSPATH=... app_process ... &' directamente. El patrón
 # 'nohup sh -c "CLASSPATH=... app_process ..."' hace que app_process muera al cerrar
 # el shell (dejaba el DeX congelado). 'env' + '&' mantiene el proceso vivo.
@@ -115,7 +123,7 @@ start_server() {
   "$ADB" -s "$PHONE" shell "env CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / com.genymobile.scrcpy.Server 5.0.1 \
   scid=${SCID} tunnel_forward=true audio=false control=true cleanup=true \
   raw_stream=true ${NEW_DISPLAY_OPT} ${MOUSE_OPT} ${CODEC_OPT} max_size=${MAX_SIZE} stay_awake=true max_fps=${FPS} \
-  video_bit_rate=${BITRATE} video_codec_options=i-frame-interval=1,bitrate-mode=2 \
+  video_bit_rate=${BITRATE} video_codec_options=i-frame-interval=${IFRAME_INTERVAL},bitrate-mode=2 \
   >/data/local/tmp/scrcpy.log 2>&1 &" 2>&1
 }
 start_server
