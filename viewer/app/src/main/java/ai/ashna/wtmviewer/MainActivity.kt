@@ -38,11 +38,20 @@ import javax.net.ssl.X509TrustManager
  * junto a rdrop y cola. Basado en el log perf2 de campo: bitrate real
  * 35 Mbps (no 12 como el default publicado), pipeline estable a 60 fps
  * con 0 corrupcion, y cola que crecia a 75 frames sin disparar drops.
+ *
+ * v1.2-cap (F4b) — PANTALLA COMPLETA ABSOLUTA + NEGOCIACION cap:
+ * - immersive sticky en ambos estados (config y video): la barra fina
+ *   de navegacion inferior desaparece y el SurfaceView ocupa TODO el
+ *   panel. Se re-aplica en onWindowFocusChanged porque Android la
+ *   restaura al abrir teclado o tras gestos del sistema.
+ * - Al conectar se lee el hardware real (DeviceCapabilities), se arma
+ *   el cap (StreamProfile) y se envia; el HUD muestra el veredicto del
+ *   cap_ack (verde = aplicado y verificado, rojo = no aplicado + motivo).
  */
 class MainActivity : Activity() {
 
     companion object {
-        const val BUILD = "1.1-perf3"
+        const val BUILD = "1.2-cap"
     }
 
     private lateinit var prefs: SharedPreferences
@@ -61,6 +70,9 @@ class MainActivity : Activity() {
     private var lastRenderedAt = 0L
     private var measurePersist = 0
 
+    // F4b: veredicto de la negociacion cap para el HUD (jamas verde falso).
+    @Volatile private var capHudLine = "perfil: esperando respuesta del relay..."
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("wtm", Context.MODE_PRIVATE)
@@ -70,6 +82,27 @@ class MainActivity : Activity() {
             prevHandler?.uncaughtException(t, e)
         }
         buildConfigUI("")
+    }
+
+    /**
+     * PANTALLA COMPLETA ABSOLUTA (F4b): immersive sticky. Oculta status bar
+     * Y la gesture/navigation bar inferior (la barra fina de abajo), y
+     * expande la app bajo ellas. Re-aplicar en onWindowFocusChanged porque
+     * el sistema las restaura tras teclado/gestos/notifications shade.
+     */
+    private fun enterImmersive() {
+        window.decorView.systemUiVisibility =
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+            View.SYSTEM_UI_FLAG_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) enterImmersive()
     }
 
     /** Log -> disco, sincrono: sobrevive a cualquier muerte del proceso. */
@@ -181,12 +214,14 @@ class MainActivity : Activity() {
         root.addView(connectBtn)
         root.addView(status)
         setContentView(root)
+        enterImmersive()   // F4b: fullscreen tambien en la pantalla de config
     }
 
     private fun startStream(url: String, token: String) {
         synchronized(logBuf) { logBuf.setLength(0) }
         persistLog()
         backBtn = null
+        capHudLine = "perfil: esperando respuesta del relay..."
 
         val surfaceView = SurfaceView(this)
         val statusOverlay = TextView(this).apply {
@@ -239,6 +274,7 @@ class MainActivity : Activity() {
         frameRoot = frame
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(frame)
+        enterImmersive()   // F4b: fullscreen ABSOLUTO en el estado de video
         showStatus("viewer v$BUILD — conectando a $url")
 
         // Tap sobre el video alterna el HUD (hasta v1.2 tactil / v1.3 overlay 2 dedos).
@@ -249,6 +285,17 @@ class MainActivity : Activity() {
             }
             true
         }
+
+        // F4b: leer el hardware REAL del receptor y armar el cap. En
+        // fullscreen absoluto, Display.getSupportedModes() reporta los
+        // pixeles verdaderos del panel (2000x1200, no la ventana recortada
+        // por la navigation bar).
+        val capReport = DeviceCapabilities(this).read()
+        val cap = StreamProfile.buildCap(capReport)
+        logMeasure("cap: panel ${capReport.panelW}x${capReport.panelH}@${capReport.refreshExact} " +
+            "decoder=${capReport.decoderName} techo=${capReport.decoderBitrateMax / 1_000_000}M " +
+            "link=${capReport.linkMbps}Mbps -> cap w=${cap.w} h=${cap.h} fps=${cap.fps} " +
+            "bitrate_max=${cap.bitrateMax}")
 
         surfaceView.holder.setKeepScreenOn(true)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
@@ -276,8 +323,26 @@ class MainActivity : Activity() {
                         decoder?.configure(codec, width, height, csd)
                     },
                     onFrame = { data, pts -> decoder?.feed(data, pts) },
-                    onStatus = { msg -> showStatus(msg) }
+                    onStatus = { msg -> showStatus(msg) },
+                    // F4b: veredicto del cap_ack -> HUD. Jamas verde falso:
+                    // verde SOLO si el relay dice applied tras VERIFICAR el
+                    // cmdline del scrcpy vivo.
+                    onCapAck = { json ->
+                        val ack = StreamProfile.parseCapAck(json)
+                        capHudLine = StreamProfile.hudLine(ack)
+                        logMeasure("cap_ack: applied=${ack.applied} " +
+                            "profile=${ack.w}x${ack.h}@${ack.fps} ${ack.bitrate}bps " +
+                            "reason=${ack.reason}")
+                        runOnUiThread {
+                            hud?.setTextColor(
+                                if (ack.applied && ack.w > 0) Color.parseColor("#7FFF7F")
+                                else Color.parseColor("#FF6A6A")
+                            )
+                        }
+                    }
                 )
+                // F4b: el cap del hardware real se fija ANTES de connect().
+                wsClient?.setCap(StreamProfile.capJson(cap))
                 wsClient?.connect()
             }
 
@@ -331,8 +396,9 @@ class MainActivity : Activity() {
                 val lat = ws?.latencyAvg() ?: 0.0
                 val rtt = ws?.rttMs() ?: -1.0
                 val txt = String.format(
-                    "%.0f fps  lat %.1f ms  rtt %.0f ms | %s | render %d  rdrop %d  qdrop %d  cola %d",
-                    fps, lat, rtt, d.decoder, d.rendered, d.renderDrops, d.queueDrops, d.queueDepth
+                    "%.0f fps  lat %.1f ms  rtt %.0f ms | %s | render %d  rdrop %d  qdrop %d  cola %d\n%s",
+                    fps, lat, rtt, d.decoder, d.rendered, d.renderDrops, d.queueDrops, d.queueDepth,
+                    capHudLine   // F4b: linea de perfil (verde=aplicado y verificado)
                 )
                 tick++
                 if (tick % 2 == 1) logMeasure("hud: $txt")
