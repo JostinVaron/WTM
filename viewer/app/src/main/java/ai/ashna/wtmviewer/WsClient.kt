@@ -26,13 +26,22 @@ import kotlin.concurrent.thread
  * converger (las primeras muestras de sync todavia no han llegado). Ahora
  * la latencia por frame solo se reporta tras >=5 muestras de sync validas;
  * antes de eso el HUD muestra lat 0.0 (sin dato), no un numero falso.
+ *
+ * v1.2-cap (F4b) — NEGOCIACION cap/cap_ack: tras el login se envia el cap
+ * del hardware del receptor (StreamProfile.capJson); el relay clampa al
+ * techo del emisor, aplica y VERIFICA contra el cmdline del scrcpy vivo, y
+ * responde cap_ack. onCapAck lleva el veredicto al HUD (jamas verde falso).
+ * Compatibilidad: si el relay es viejo y no conoce "cap", simplemente no
+ * responde — el HUD queda en "sin respuesta del relay" y el stream sigue.
  */
 class WsClient(
     private val baseUrl: String,
     private val viewerToken: String,
     private val onConfig: (codec: String, width: Int, height: Int, csd: ByteArray) -> Unit,
     private val onFrame: (data: ByteArray, pts: Long) -> Unit,
-    private val onStatus: (String) -> Unit
+    private val onStatus: (String) -> Unit,
+    /** F4b: veredicto de la negociacion cap (aplicado+verificado / rechazado). */
+    private val onCapAck: (org.json.JSONObject) -> Unit = {}
 ) {
     companion object {
         private const val HB_MS = 25L          // como el cliente web
@@ -42,6 +51,12 @@ class WsClient(
     private var socket: SSLSocket? = null
     private val closed = AtomicBoolean(false)
     private var sessionCookie: String = ""
+
+    /** Mensaje cap listo para enviar (F4b); se envia una vez tras el login. */
+    @Volatile private var pendingCapJson: String? = null
+
+    /** MainActivity lo fija antes de connect(): el cap del hardware real. */
+    fun setCap(json: String) { pendingCapJson = json }
 
     // --- reloj/latencia (v1.1-perf1) ---
     @Volatile private var offsetMs = 0.0
@@ -66,6 +81,9 @@ class WsClient(
                     sendJson("""{"t":"sync","c":${System.currentTimeMillis()}}""")
                     Thread.sleep(120)
                 }
+                // F4b: el cap va justo tras el login+sync — es la primera
+                // cosa que el relay negocia en la sesion.
+                pendingCapJson?.let { sendJson(it) }
                 startHeartbeat()
                 readLoop()
             } catch (e: Exception) {
@@ -237,7 +255,7 @@ class WsClient(
             if (len == 126L) {
                 len = dis.readUnsignedShort().toLong()
             } else if (len == 127L) {
-                len = dis.readLong()
+                len = dis.readLong().toLong()
             }
             if (masked) throw IOException("server no debe enmascarar frames")
 
@@ -254,6 +272,11 @@ class WsClient(
                                 m!!.getString("description"), android.util.Base64.NO_WRAP
                             )
                             onConfig(m.getString("codec"), m.getInt("width"), m.getInt("height"), csd)
+                        }
+                        "cap_ack" -> {
+                            // F4b: veredicto de la negociacion (jamas verde falso:
+                            // applied solo si el relay VERIFICO el cmdline del scrcpy).
+                            onCapAck(m ?: JSONObject())
                         }
                         "sync" -> {
                             // Server: {"type":"sync","s":server_ms,"c":echo}.
