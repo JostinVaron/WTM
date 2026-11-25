@@ -48,7 +48,9 @@ class WsClient(
     private var socket: SSLSocket? = null
     private val closed = AtomicBoolean(false)
     private var sessionCookie: String = ""
-    private var dbg = 0
+    private val sendExec = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "wtm-input").apply { isDaemon = true }
+    }
 
     /** Mensaje cap listo para enviar (F4b); se envia una vez tras el login. */
     @Volatile private var pendingCapJson: String? = null
@@ -57,12 +59,15 @@ class WsClient(
     fun setCap(json: String) { pendingCapJson = json }
 
     /** F5: canal de input (pd/pm/pu/ph) por el mismo WebSocket del stream. */
+    /**
+     * Canal de input del viewer (PenForwarder). Se ejecuta en un hilo propio:
+     * onTouch corre en el hilo de UI y Android lanza NetworkOnMainThreadException
+     * al escribir el socket desde ahi (el catch de sendRaw la tragaba y NINGUN
+     * evento llegaba al relay; bug medido 2026-11-25 con logcat). Un unico
+     * executor conserva el orden de los eventos.
+     */
     fun sendInput(json: String) {
-        if (dbg < 30) {
-            dbg++
-            android.util.Log.d("WTM", "sendInput socket=${socket != null} $json")
-        }
-        sendJson(json)
+        try { sendExec.execute { sendJson(json) } } catch (_: Exception) {}
     }
 
     // --- reloj/latencia (v1.1-perf1) ---
@@ -373,12 +378,13 @@ class WsClient(
             out.write(data)
             out.flush()
         } catch (e: Exception) {
-            if (dbg < 40) { dbg++; android.util.Log.d("WTM", "sendRaw error: $e") }
+            android.util.Log.d("WTM", "sendRaw error: $e")
         }
     }
 
     fun close() {
         closed.set(true)
+        try { sendExec.shutdownNow() } catch (_: Exception) {}
         try { socket?.close() } catch (_: Exception) {}
     }
 }

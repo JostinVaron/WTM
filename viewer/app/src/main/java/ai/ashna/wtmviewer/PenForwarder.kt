@@ -48,8 +48,6 @@ class PenForwarder(
         /** Zona HUD: esquina superior derecha, ~56dp. */
         private const val HUD_DP = 56
 
-        /** Diagnostico acotado del pipeline de input (logcat, primeras 30). */
-        private var dbgCount = 0
     }
 
     private var prevStylusBtn = false
@@ -59,12 +57,6 @@ class PenForwarder(
 
     override fun onTouch(v: View, ev: MotionEvent): Boolean {
         // Despacho sin buffer: menor latencia en trazos rapidos.
-        if (dbgCount < 30) {
-            dbgCount++
-            android.util.Log.d("WTM", "onTouch masked=${ev.actionMasked} " +
-                "x=${ev.x.toInt()} y=${ev.y.toInt()} tool=${ev.getToolType(0)} " +
-                "sw=${streamW()} sh=${streamH()}")
-        }
         try { v.requestUnbufferedDispatch(ev) } catch (_: Exception) {}
 
         checkStylusButton(ev)
@@ -156,10 +148,6 @@ class PenForwarder(
         val pen = isPenTool(tool)
         // Solo dibujan stylus/eraser/finger; el rechazo de palma ya lo hizo
         // el framework de Samsung antes de entregar el evento.
-        if (dbgCount < 60) {
-            dbgCount++
-            android.util.Log.d("WTM", "emit act=$act tool=$tool pen=$pen")
-        }
         if (!pen && tool != MotionEvent.TOOL_TYPE_FINGER &&
             tool != MotionEvent.TOOL_TYPE_UNKNOWN) return
 
