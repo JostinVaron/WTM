@@ -920,7 +920,16 @@ async def scrcpy_reader(state):
         # connection (small delay so adb queues the video LocalSocket first) so the
         # server can proceed past its accept() for the control channel.
         await asyncio.sleep(0.3)
-        await scrcpy_control.connect()
+        control_ok = await scrcpy_control.connect()
+        if control_ok:
+            # F3 (pantalla verde): el servidor scrcpy conoce el id del display
+            # virtual internamente, asi que START_APP lo puebla sin la carrera
+            # de `dumpsys display` que tenia el shell. WTM_START_APP permite
+            # cambiar el contenido inicial sin tocar codigo.
+            start_app = os.environ.get("WTM_START_APP", "com.android.settings").strip()
+            if start_app:
+                scrcpy_control.send(ctrl_start_app(start_app))
+                print(f"[scrcpy] START_APP {start_app} (display virtual)", flush=True)
         try:
             while True:
                 chunk = await reader.read(262144)
@@ -1068,6 +1077,7 @@ CTRL_TYPE_INJECT_KEYCODE = 0
 CTRL_TYPE_INJECT_TEXT = 1
 CTRL_TYPE_INJECT_TOUCH = 2
 CTRL_TYPE_INJECT_SCROLL = 3
+CTRL_TYPE_START_APP = 16   # scrcpy v5: lanza una app en el display virtual
 
 ACTION_DOWN = 0
 ACTION_UP = 1
@@ -1136,6 +1146,16 @@ def _i16fp(v):
 def ctrl_scroll(x, y, w, h, vscroll, hscroll=0.0):
     return struct.pack(">BiiHHhhi", CTRL_TYPE_INJECT_SCROLL, int(x), int(y), int(w), int(h),
                        _i16fp(hscroll), _i16fp(vscroll), 0)
+
+
+def ctrl_start_app(package):
+    """TYPE_START_APP (scrcpy v5): el server resuelve el display virtual solo.
+
+    Formato: u8 tipo | u8 len | utf8 paquete (ControlMessageReader.parseStartApp).
+    Sustituye la carrera de `dumpsys display` + `am start --display` del shell.
+    """
+    b = package.encode("utf-8")[:255]
+    return struct.pack(">BB", CTRL_TYPE_START_APP, len(b)) + b
 
 
 class ScrcpyControl:
@@ -1775,6 +1795,11 @@ async def ws_handler(request):
                 elif data.get("t") in ("pd", "pm", "pu", "ph"):
                     import pen_handler
                     await pen_handler.handle(state, data)
+                elif data.get("t") == "pen_test":
+                    # Trazo sintetico por el camino UHID: verifica getevent y
+                    # PenProbe sin depender de que el usuario dibuje.
+                    import pen_handler
+                    await pen_handler.synthetic_test(state)
                 elif data.get("t") == "flash":
                     state.flash_t = time.time()
                     injector.flash(data.get("c", 0))
