@@ -66,7 +66,7 @@ async def run(url, token, timeout, flash=False):
                     await asyncio.wait_for(ws.receive(), timeout=1.0)
                 except asyncio.TimeoutError:
                     pass
-    what = "flash de latencia" if flash else "trazo sintetico"
+    what = "flash de latencia (X11)" if flash else "trazo sintetico"
     print(f"pen_test: {what} enviado a {url}")
 
 
@@ -80,7 +80,7 @@ def main():
     ap.add_argument("--url", default=f"https://{host}:{port}")
     ap.add_argument("--timeout", type=float, default=4.0)
     ap.add_argument("--flash", action="store_true",
-                    help="mide el camino de video (inject->capture->relay)")
+                    help="backend X11: flash de latencia (no aplica a scrcpy)")
     args = ap.parse_args()
     asyncio.run(run(args.url.rstrip("/"), viewer_token(), args.timeout,
                     args.flash))

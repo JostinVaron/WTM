@@ -102,9 +102,11 @@ contains: [releases](docs/releases.md) · verified evidence:
   verification on this pair, not a hardware certification.
 - **Current pinned profile (2026-11-25)**: `WTM_PIN_PROFILE=1` applies
   2000x1200@60 and 35 Mbps only after verifying the live scrcpy cmdline
-  (`cap_ack: applied=true`). On the current pair the viewer HUD reports about
-  5 ms render latency, ~4 ms RTT and zero `rdrop`/`qdrop` on a static probe;
-  this is video-path telemetry, not a pen-to-photon measurement.
+  (`cap_ack: applied=true`). During a 3 s stylus stroke the viewer HUD measured
+  60 fps, `lat` 4.4 ms (scrcpy PTS→arrival), `dec` 13.2 ms (arrival→render),
+  ~4 ms RTT and zero `rdrop`/`qdrop`. This is video-path telemetry, not a
+  pen-to-photon measurement; the method and backlog are in
+  [latency.md](docs/latency.md).
 - HEVC decoding capability on the tablet was probed and confirmed (2026-11-08, Chrome
   156), and the H.264-vs-HEVC A/B was then **measured on this pair (2026-11-09)**:
   for the tested content class, HEVC decoded ~30% faster with ~3x lower jitter peaks

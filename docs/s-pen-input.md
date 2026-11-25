@@ -233,7 +233,8 @@ adb -s <phone> shell 'timeout 8 getevent -lt /dev/input/event14'
 - El hover activo bloquea táctil/mouse por diseño (comportamiento Galaxy Tab).
 - Un hover estático sin `HOVER_EXIT` cae por el respaldo de 1 s; no es
   exactamente el bloqueo indefinido de una EMR física, pero evita el bug.
-- La latencia de tinta extremo a extremo aún no está medida formalmente; el
-  HUD del viewer reporta latencia de video y RTT, no el trazo completo.
+- La latencia instrumentada está en [latency.md](latency.md): `lat` (PTS
+  scrcpy→llegada) y `dec` (llegada→render). El pen-to-photon completo
+  (incluye scanout y dibujo de la app) aún requiere ground truth con cámara.
 - La verificación es sobre el par S25 + SM-P613; otros dispositivos pueden
   mapear tilt/eraser distinto.
