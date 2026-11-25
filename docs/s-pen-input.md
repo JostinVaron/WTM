@@ -96,37 +96,44 @@ WTM Pen
 
 ## 5. Ciclo de vida del hover y el bug del táctil bloqueado
 
-Síntoma de campo (2026-11-25): tras usar el S Pen, el táctil y el mouse del
-display virtual quedaban muertos hasta cambiar de app. Causa: el hover de la
-pluma mantenía el dispositivo UHID **in-range para siempre**. Android suprime
-táctil y mouse mientras un digitizador Pen está en rango (el mismo
-comportamiento de una Galaxy Tab real con EMR).
+Primer reporte (2026-11-25): tras usar el S Pen, táctil y mouse quedaban
+muertos. Causa: el hover mantenía el UHID **in-range para siempre**; Android
+suprime táctil y mouse mientras un digitizador Pen está en rango (como una
+Galaxy Tab con EMR). Se añadió `HOVER_EXIT` inmediato y un respaldo.
 
-Solución en dos capas:
+Segundo reporte (misma fecha): el **mouse ya funcionaba**, pero el dedo no.
+El mouse no pasa por el filtro de dedos; el dedo caía dentro de una ventana
+demasiado larga (viewer 800 ms + relay 600 ms + UHID 1000 ms). Un toque
+deliberado 0.4 s después del lápiz se descartaba.
+
+Solución v6 (250 ms en las tres capas):
 
 1. **Camino rápido**: `PenForwarder` reenvía `ACTION_HOVER_EXIT` como
-   `ph a=10`; `pen_handler` manda un reporte con `in_range=0` **al instante**.
-2. **Respaldo**: cada hover/UP arma un temporizador
-   `WTM_PEN_OOR_MS` (1000 ms por defecto). Un down/move lo cancela. Si el
-   `HOVER_EXIT` se pierde, el táctil vuelve igual.
+   `ph a=10`; `pen_handler` manda `in_range=0` **al instante**.
+2. **Respaldo**: cada hover/UP arma `WTM_PEN_OOR_MS` (250 ms). Un down/move
+   lo cancela.
+3. **Dedos**: viewer y relay rechazan dedos solo 250 ms
+   (`WTM_PALM_WINDOW_MS`); `TOOL_TYPE_PALM` y `FLAG_CANCELED` siguen siendo
+   el filtro principal.
 
-Evidencia `getevent -lt /dev/input/event14` del S25:
+Evidencia `getevent -lt /dev/input/event14` del S25 (v6):
 
 ```
-[57714.676181] EV_KEY BTN_DIGI DOWN     # hover enter
-[57715.477969] EV_KEY BTN_DIGI UP       # HOVER_EXIT (inmediato)
-[57716.280448] EV_KEY BTN_DIGI DOWN     # segundo hover
-[57717.300590] EV_KEY BTN_DIGI UP       # respaldo, 1.02 s después
+[59659.091838] EV_KEY BTN_DIGI DOWN     # hover enter
+[59659.193346] EV_KEY BTN_DIGI UP       # HOVER_EXIT, 101 ms
+[59659.695687] EV_KEY BTN_DIGI DOWN     # segundo hover
+[59659.947614] EV_KEY BTN_DIGI UP       # respaldo, 252 ms
 ```
 
-Mientras la pluma se mueve en hover, el táctil se bloquea: es el
-comportamiento nativo de una Galaxy Tab. Al alejarla, `HOVER_EXIT` lo libera
-de inmediato.
+Verificación del dedo: stylus y 0.4 s después un tap de dedo en (1000,700);
+PenProbe mostró `tool: FINGER` (con la ventana anterior se descartaba).
+Mientras la pluma se mueve en hover, el táctil se bloquea (Galaxy Tab); al
+alejarla, el respaldo de 250 ms lo libera.
 
 Variables:
 
-- `WTM_PEN_OOR_MS` (default `1000`): respaldo de fuera-de-rango.
-- `WTM_PALM_WINDOW_MS` (default `600`): ventana del rechazo de palma del relay.
+- `WTM_PEN_OOR_MS` (default `250`): respaldo de fuera-de-rango.
+- `WTM_PALM_WINDOW_MS` (default `250`): ventana del rechazo de palma del relay.
 
 ## 6. Tilt y orientación
 
@@ -156,10 +163,10 @@ el redondeo a grados enteros del HID.
 ## 7. Rechazo de palma (tres capas)
 
 1. **Viewer**: descarta `TOOL_TYPE_PALM` (5), honra `FLAG_CANCELED` (API 33+),
-   ignora dedos 800 ms tras el último contacto de stylus y libera con
+   ignora dedos 250 ms tras el último contacto de stylus y libera con
    `a=3` los dedos que ya estaban abajo.
 2. **Relay**: si un dedo se mueve con stylus activo, lo suelta con un UP y no
-   reenvía sus movimientos (`WTM_PALM_WINDOW_MS`, 600 ms).
+   reenvía sus movimientos (`WTM_PALM_WINDOW_MS`, 250 ms).
 3. **Android**: el hover activo de la pluma suprime el táctil, igual que en
    hardware Samsung.
 

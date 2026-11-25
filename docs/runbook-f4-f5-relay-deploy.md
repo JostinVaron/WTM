@@ -325,3 +325,49 @@ Tab); al alejarla, HOVER_EXIT lo libera sin esperar.
 `54 tests OK` (`tests.test_pen_handler` 24, `test_server_security`,
 `test_server_live`). CI `45718740904` compiló y firmó el APK con el
 certificado estable `98:18:35:…:5F:16` (DN `CN=WTM Viewer`).
+
+## Actualización 2026-11-25 (cuarta sesión): el dedo después del lápiz
+
+### Reporte de campo
+
+- Con el S Pen: se usa, se aleja, y el **táctil del dedo no responde**.
+- El **mouse sí funciona**; lápiz y mouse a la vez funcionan perfecto.
+
+### Causa
+
+El mouse no pasa por el filtro de dedos; el dedo sí. La ventana era
+demasiado larga en las tres capas: viewer 800 ms, relay 600 ms y pluma UHID
+1000 ms en rango. Un toque deliberado poco después de levantar el lápiz caía
+dentro y se descartaba. (La supresión global del S25 quedó descartada porque
+el mouse funcionaba.)
+
+### Fix v6
+
+- `PenForwarder.kt`: `STYLUS_HOLDOFF_MS` 800 → **250 ms**.
+- `pen_handler.py`: `WTM_PALM_WINDOW_MS` 600 → **250 ms**;
+  `WTM_PEN_OOR_MS` 1000 → **250 ms**.
+- `HOVER_EXIT` sigue sacando la pluma de rango al instante.
+- La palma real la siguen filtrando `TOOL_TYPE_PALM`, `FLAG_CANCELED` y el
+  bloqueo mientras el stylus toca o se mueve en hover activo.
+
+### Evidencia
+
+`getevent -lt /dev/input/event14` del S25:
+
+```
+[59659.091838] EV_KEY BTN_DIGI DOWN     # hover enter
+[59659.193346] EV_KEY BTN_DIGI UP       # HOVER_EXIT, 101 ms
+[59659.695687] EV_KEY BTN_DIGI DOWN     # segundo hover
+[59659.947614] EV_KEY BTN_DIGI UP       # respaldo, 252 ms
+```
+
+Prueba del dedo: stylus, 0.4 s después un tap en (1000,700); el relay recibió
+`tool=finger` y PenProbe mostró `tool: FINGER` con el punto verde.
+
+### APK y verificación
+
+- `0.1.5-pen6` (versionCode 6), CI `45722739695`.
+- `adb install -r` sobre la v5 funcionó en tablet y S25 (firma estable,
+  prefs y token intactos).
+- 54 tests unitarios OK.
+- Relay nuevo en `~/dex`; healthz OK; scrcpy_alive true.
