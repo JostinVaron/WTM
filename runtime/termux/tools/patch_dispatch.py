@@ -14,12 +14,12 @@ P = "runtime/termux/server.py"
 
 src = open(P, encoding="utf-8").read()
 
-if 'pen_handler' in src:
+if "pen_handler" in src:
     print("ya estaba insertado, nada que hacer")
     sys.exit(0)
 
 m = re.search(
-    r'([ \t]+)elif data\.get\("t"\) == "hb":\n[ \t]+await ws\.send_str\("h"\)[^\n]*\n',
+    r"([ \t]+)elif data\.get\(\"t\"\) == \"hb\":\n[ \t]+await ws\.send_str\(\"h\"\)[^\n]*\n",
     src,
 )
 if not m:
@@ -27,14 +27,15 @@ if not m:
     sys.exit(1)
 
 indent = m.group(1)
-new = m.group(0) + (
-    indent + 'elif data.get("t") == "cap":\n'
-    indent + '    import cap_handler\n'
-    indent + '    await cap_handler.handle(state, ws, data)\n'
-    indent + 'elif data.get("t") in ("pd", "pm", "pu", "ph"):\n'
-    indent + '    import pen_handler\n'
-    indent + '    await pen_handler.handle(state, data)\n'
-)
+lines = [
+    'elif data.get("t") == "cap":',
+    "    import cap_handler",
+    "    await cap_handler.handle(state, ws, data)",
+    'elif data.get("t") in ("pd", "pm", "pu", "ph"):',
+    "    import pen_handler",
+    "    await pen_handler.handle(state, data)",
+]
+new = m.group(0) + indent + ("\n" + indent).join(lines) + "\n"
 open(P, "w", encoding="utf-8").write(src.replace(m.group(0), new, 1))
 print("OK: 5 lineas insertadas tras el bloque hb:")
 print(new)
