@@ -37,12 +37,12 @@ los eventos no llegarian al display virtual.
 Rechazo de palma (cinturon y tirantes):
   - el viewer descarta TOOL_TYPE_PALM y FLAG_CANCELED (Android 13+);
   - aqui, con WTM_PALM_REJECT=1 (default), se descarta cualquier dedo
-    mientras haya stylus activo en WTM_PALM_WINDOW_MS (600 ms default).
+    mientras haya stylus activo en WTM_PALM_WINDOW_MS (250 ms default).
     Si ese dedo ya estaba abajo, se le manda un UP para no dejarlo pegado.
 
 Ciclo de vida del hover (clave para que el tactil vuelva):
   - HOVER_EXIT del viewer (act 10) saca la pluma de rango al instante;
-  - cada hover/UP arma un respaldo de WTM_PEN_OOR_MS (1000 ms default)
+  - cada hover/UP arma un respaldo de WTM_PEN_OOR_MS (250 ms default)
     por si ese evento se pierde. Sin esto la pluma quedaba en rango para
     siempre y Android suprimia tactil y mouse en el display virtual.
 
@@ -107,20 +107,30 @@ def _palm_reject():
 
 
 def _palm_window():
-    """Ventana (s) en la que un dedo se rechaza tras tocar con el stylus."""
+    """Ventana (s) en la que un dedo se rechaza tras tocar con el stylus.
+
+    250 ms: cubre la palma que llega con el trazo, pero no bloquea un toque
+    deliberado poco despues de levantar el lapiz. La palma explicita la
+    filtran TOOL_TYPE_PALM y FLAG_CANCELED.
+    """
     try:
-        ms = int(os.environ.get("WTM_PALM_WINDOW_MS", "600"))
+        ms = int(os.environ.get("WTM_PALM_WINDOW_MS", "250"))
     except (TypeError, ValueError):
-        ms = 600
+        ms = 250
     return max(0, min(5000, ms)) / 1000.0
 
 
 def _oor_delay():
-    """Respaldo de fuera-de-rango si el viewer no manda HOVER_EXIT."""
+    """Respaldo de fuera-de-rango si el viewer no manda HOVER_EXIT.
+
+    250 ms: al alejar el lapiz el tactil vuelve casi de inmediato. El camino
+    rapido sigue siendo HOVER_EXIT (inmediato); esto solo cubre el evento
+    perdido. Mientras el hover se mueve, cada evento refresca el timer.
+    """
     try:
-        ms = int(os.environ.get("WTM_PEN_OOR_MS", "1000"))
+        ms = int(os.environ.get("WTM_PEN_OOR_MS", "250"))
     except (TypeError, ValueError):
-        ms = 1000
+        ms = 250
     return max(50, min(5000, ms)) / 1000.0
 
 

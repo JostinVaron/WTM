@@ -35,8 +35,10 @@ import kotlin.math.roundToInt
  *  2. FLAG_CANCELED (Android 13+) en ACTION_CANCEL / ACTION_POINTER_UP:
  *     el puntero se cancela (a=3), no se convierte en un UP normal.
  *  3. Mientras el stylus esta TOCANDO (no solo hover), los dedos se
- *     descartan durante 800 ms. Si un dedo ya estaba abajo, se le manda
- *     un cancel para no dejar el puntero pegado en el S25.
+ *     descartan durante 250 ms. Si un dedo ya estaba abajo, se le manda
+ *     un cancel para no dejar el puntero pegado en el S25. La ventana es
+ *     corta a proposito: un toque deliberado despues de levantar el lapiz
+ *     debe funcionar; la palma real la filtran TOOL_TYPE_PALM/FLAG_CANCELED.
  *
  * HUD: se alterna tocando la esquina superior derecha (la zona del
  * propio HUD — ese gesto se consume localmente, NO viaja al S25) o con
@@ -58,8 +60,8 @@ class PenForwarder(
         /** MotionEvent.TOOL_TYPE_PALM es @hide; su valor es estable (5). */
         private const val TOOL_TYPE_PALM = 5
 
-        /** Ventana de gracia tras el ultimo contacto del stylus. */
-        private const val STYLUS_HOLDOFF_MS = 800L
+        /** Ventana de gracia tras el ultimo contacto del stylus (250 ms). */
+        private const val STYLUS_HOLDOFF_MS = 250L
     }
 
     private var prevStylusBtn = false
