@@ -45,7 +45,7 @@ import javax.net.ssl.X509TrustManager
 class MainActivity : Activity() {
 
     companion object {
-        const val BUILD = "1.3-pen"
+        const val BUILD = "1.3-pen-r2"
     }
 
     private lateinit var prefs: SharedPreferences
@@ -79,7 +79,17 @@ class MainActivity : Activity() {
             persistCrash(t, e)
             prevHandler?.uncaughtException(t, e)
         }
-        buildConfigUI("")
+        // Auto-conexion (2026-11-25): si ya hay URL + token validos guardados,
+        // la sesion arranca sola en vez de obligar a pulsar "Conectar" en cada
+        // apertura. Con error, el boton "Volver" devuelve a la configuracion.
+        val savedUrl = prefs.getString("base_url", null)
+        val savedToken = prefs.getString("viewer_token", null)
+        if (!savedUrl.isNullOrEmpty() && !savedToken.isNullOrEmpty() &&
+            savedToken.length == 64 && savedUrl.startsWith("https://")) {
+            startStream(savedUrl, savedToken)
+        } else {
+            buildConfigUI("")
+        }
     }
 
     /**

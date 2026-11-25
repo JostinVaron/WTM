@@ -336,6 +336,14 @@ class WsClient(
 
     private fun sendJson(s: String) = sendRaw(0x1, s.toByteArray(Charsets.UTF_8))
 
+    /**
+     * Escritura serializada del socket. El hilo de sync/heartbeat y el hilo
+     * de UI (PenForwarder) escriben en el MISMO socket: sin este lock los
+     * frames se intercalan (cabecera de uno + payload de otro), el server
+     * recibe UTF-8 invalido y cierra con 1007. Bug medido en campo 2026-11-25:
+     * el primer toque o trazo mataba la sesion.
+     */
+    @Synchronized
     private fun sendRaw(opcode: Int, data: ByteArray) {
         try {
             val out = socket?.getOutputStream() ?: return

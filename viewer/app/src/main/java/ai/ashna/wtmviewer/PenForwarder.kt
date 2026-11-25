@@ -147,7 +147,8 @@ class PenForwarder(
         val pen = isPenTool(tool)
         // Solo dibujan stylus/eraser/finger; el rechazo de palma ya lo hizo
         // el framework de Samsung antes de entregar el evento.
-        if (!pen && tool != MotionEvent.TOOL_TYPE_FINGER) return
+        if (!pen && tool != MotionEvent.TOOL_TYPE_FINGER &&
+            tool != MotionEvent.TOOL_TYPE_UNKNOWN) return
 
         val vw = view.width.coerceAtLeast(1)
         val vh = view.height.coerceAtLeast(1)
