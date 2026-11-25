@@ -246,3 +246,82 @@ La Fase 3 ya **no** requiere parchear `scrcpy-server`: se usa el `scrcpy-server`
 - Stream HEVC 2000x1200; tablet v3 reconectada y mostrando PenProbe.
 - 51 tests unitarios OK (`tests.test_pen_handler`, `test_server_security`,
   `test_server_live`).
+
+## Actualización 2026-11-25 (tercera sesión): táctil tras el S Pen, firma estable y arranque
+
+### Bug de campo: táctil y mouse muertos después de usar el lápiz
+
+El hover de la pluma dejaba el dispositivo UHID **in-range para siempre**:
+`_out_of_range_later` solo se agendaba tras un UP y el viewer no reenviaba
+`ACTION_HOVER_EXIT`. Android suprime táctil y mouse mientras un digitizador
+Pen está en rango (el mismo comportamiento de una Galaxy Tab con EMR), así
+que el display virtual quedaba sordo hasta cambiar de app.
+
+Fix:
+
+- `PenForwarder.kt`: `ACTION_HOVER_EXIT` -> `ph a=10`.
+- `pen_handler.py`: `a=10` manda `in_range=0` al instante; cada hover/UP arma
+  un respaldo `WTM_PEN_OOR_MS` (1000 ms) que se cancela con down/move; el
+  timer queda atado a la sesión scrcpy.
+- Ventana de palma del relay configurable: `WTM_PALM_WINDOW_MS` (600 ms).
+
+Evidencia (`getevent -lt /dev/input/event14` del S25):
+
+```
+[57714.676181] EV_KEY BTN_DIGI DOWN     # hover enter
+[57715.477969] EV_KEY BTN_DIGI UP       # HOVER_EXIT inmediato
+[57716.280448] EV_KEY BTN_DIGI DOWN     # segundo hover
+[57717.300590] EV_KEY BTN_DIGI UP       # respaldo, 1.02 s
+```
+
+Mientras la pluma se mueve en hover el táctil sigue bloqueado (nativo Galaxy
+Tab); al alejarla, HOVER_EXIT lo libera sin esperar.
+
+### APK 0.1.3-pen4 y firma estable
+
+- `versionCode 4`, `versionName 0.1.3-pen4`; CI run `45718740904`.
+- Keystore PKCS12 en `~/.config/wtm/wtm-viewer.p12` (600) y
+  `keystore.env` (600); **nunca** en el repo.
+- Secrets: `WTM_KEYSTORE_BASE64`, `WTM_KEYSTORE_PASSWORD`, `WTM_KEY_ALIAS`,
+  `WTM_KEY_PASSWORD`. `viewer-apk.yml` lo decodifica y el build firma
+  `debug` con `signingConfigs.stable`; CI imprime el SHA-256.
+- Primera instalación tras el cambio de firma: desinstalar una vez. Después
+  `adb install -r` funciona entre builds.
+- Tablet: respaldo de `shared_prefs/wtm.xml` con `run-as`, uninstall, install,
+  lanzar una vez, force-stop, restaurar XML y relanzar. Token/URL intactos.
+
+### Wizard y widgets
+
+- `~/.shortcuts/DeX` ahora usa el `PORT` de `server.env`, lanza el viewer
+  nativo en la tablet si su ADB está conectado y actualiza su `base_url` con
+  `run-as` al IP del hotspot.
+- El diálogo final **ya no muestra el token** (seguridad); muestra la URL y
+  la huella TLS. El token sigue en `~/.config/wtm/auth-tokens.json` para el
+  fallback Chrome.
+- `WTM_BIND_HOST=0.0.0.0` se respeta y `WTM_ALLOWED_HOSTS` se amplía sin
+  recortar `localhost`/`127.0.0.1`.
+- `WTM_WIZARD_NONINTERACTIVE=1` permite probar el wizard sin diálogos.
+- Nuevo widget `PenTest` (`~/.shortcuts/PenTest`): lanza PenProbe en el
+  display virtual y dispara 180 reportes UHID; log en `rd-pentest.log`.
+
+### Ciclo de arranque verificado
+
+1. `Exit-Dex`: relay detenido, `rd-dex-stopped` escrito, watchdog vivo.
+2. `DeX` (no interactivo): relay nuevo (PID 9591), `healthz OK`,
+   `scrcpy_alive:true`, flag borrado, tablet relanzada y reconectada.
+3. Captura del display virtual tras el ciclo: 2000x1200, 5555 colores,
+   0.0 % verde.
+4. `PenTest`: PenProbe en display 25, 171 reportes UHID, `rc=0`.
+
+### Variables nuevas
+
+- `WTM_PEN_OOR_MS` (default `1000`): respaldo de fuera-de-rango.
+- `WTM_PALM_WINDOW_MS` (default `600`): ventana de rechazo de palma del relay.
+- `WTM_WIZARD_NONINTERACTIVE` (`1` para pruebas sin diálogos).
+- `WTM_TABLET_MODEL` (default `SM-P613`): prefijo de modelo para el wizard.
+
+### Tests
+
+`54 tests OK` (`tests.test_pen_handler` 24, `test_server_security`,
+`test_server_live`). CI `45718740904` compiló y firmó el APK con el
+certificado estable `98:18:35:…:5F:16` (DN `CN=WTM Viewer`).

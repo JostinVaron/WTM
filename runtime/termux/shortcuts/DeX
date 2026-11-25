@@ -18,14 +18,53 @@ fi
 mkdir -p "$PREFIX/tmp"
 exec >>"$LOG" 2>&1
 
+NONINTERACTIVE="${WTM_WIZARD_NONINTERACTIVE:-0}"
 log(){ printf '[wizard] %s %s\n' "$(date '+%F %T')" "$*"; }
-ui(){ log "$1"; timeout 4 termux-toast -g top "$1" >/dev/null 2>&1 || true; }
-fail(){ ui "DeX FALLO: $1"; termux-notification -t "DeX: fallo" --content "$1 — log: rd-wizard.log" >/dev/null 2>&1 || true; log "FALLO: $1"; exit 1; }
+ui(){ log "$1"; [ "$NONINTERACTIVE" = "1" ] && return 0; timeout 4 termux-toast -g top "$1" >/dev/null 2>&1 || true; }
+fail(){ ui "DeX FALLO: $1"; [ "$NONINTERACTIVE" = "1" ] || termux-notification -t "DeX: fallo" --content "$1 — log: rd-wizard.log" >/dev/null 2>&1 || true; log "FALLO: $1"; exit 1; }
 ash(){ "$ADB" -s 127.0.0.1:5555 shell "$1" 2>/dev/null | tr -d '\r'; }
 health(){ curl -sk --max-time 3 "https://${1}:$PORT/healthz" 2>/dev/null; }
 json_text(){ python3 -c 'import sys,json
 try: print(json.load(sys.stdin).get("text","").strip())
 except Exception: print("")'; }
+
+# Tablet: se busca por modelo (SM-P613), nunca se asume el serial.
+tablet_serial(){
+  local s model
+  for s in $("$ADB" devices 2>/dev/null | tr -d '\r' | awk 'NR>1 && $2=="device"{print $1}'); do
+    [ "$s" = "127.0.0.1:5555" ] && continue
+    model=$("$ADB" -s "$s" shell getprop ro.product.model 2>/dev/null | tr -d '\r')
+    case "$model" in
+      "${WTM_TABLET_MODEL:-SM-P613}"*) printf '%s' "$s"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# Actualiza la URL guardada del viewer (run-as, APK debug) y lo lanza.
+# Si el ADB de la tablet no esta disponible, no es un fallo: la app queda
+# con su URL anterior y el wizard lo registra.
+tablet_launch(){
+  local tab="$1" ip="$2" pkg=ai.ashna.wtmviewer tmp="$PREFIX/tmp/wtm-tablet-prefs.xml"
+  if "$ADB" -s "$tab" shell run-as "$pkg" cat "/data/data/$pkg/shared_prefs/wtm.xml" 2>/dev/null | tr -d '\r' > "$tmp" && [ -s "$tmp" ]; then
+    sed -i "s#<string name=\"base_url\">[^<]*</string>#<string name=\"base_url\">https://$ip:$PORT</string>#" "$tmp" || true
+    "$ADB" -s "$tab" shell am force-stop "$pkg" >/dev/null 2>&1 || true
+    if "$ADB" -s "$tab" shell "run-as $pkg sh -c 'cat > /data/data/$pkg/shared_prefs/wtm.xml'" < "$tmp" >/dev/null 2>&1; then
+      log "tablet: base_url -> https://$ip:$PORT"
+    else
+      log "tablet: no pude escribir prefs; la app conserva su URL."
+    fi
+    rm -f "$tmp"
+  else
+    rm -f "$tmp"
+    log "tablet: sin prefs accesibles (run-as); no toco la URL."
+  fi
+  if "$ADB" -s "$tab" shell am start -n "$pkg/.MainActivity" >/dev/null 2>&1; then
+    log "tablet: viewer lanzado en $tab"
+  else
+    log "tablet: no pude lanzar el viewer; abrelo a mano."
+  fi
+}
 
 log "=== wizard iniciado ==="
 "$ADB" start-server >/dev/null 2>&1 || true
@@ -79,10 +118,26 @@ done
 log "hotspot OK, IP=$IP"
 
 if [ -f "$ENVF" ]; then
-  sed -i "s/^WTM_BIND_HOST=.*/WTM_BIND_HOST=$IP/" "$ENVF"
-  sed -i "s/^WTM_ALLOWED_HOSTS=.*/WTM_ALLOWED_HOSTS=$IP/" "$ENVF"
-  grep -q '^WTM_BIND_HOST=' "$ENVF" || echo "WTM_BIND_HOST=$IP" >> "$ENVF"
-  grep -q '^WTM_ALLOWED_HOSTS=' "$ENVF" || echo "WTM_ALLOWED_HOSTS=$IP" >> "$ENVF"
+  # 0.0.0.0 se respeta (sirve hotspot y router); una IP fija se actualiza.
+  BIND=$(grep -m1 '^WTM_BIND_HOST=' "$ENVF" | cut -d= -f2-)
+  if [ -z "$BIND" ]; then
+    echo "WTM_BIND_HOST=0.0.0.0" >> "$ENVF"
+  elif [ "$BIND" != "0.0.0.0" ] && [ "$BIND" != "$IP" ]; then
+    sed -i "s/^WTM_BIND_HOST=.*/WTM_BIND_HOST=$IP/" "$ENVF"
+  fi
+  # La lista de hosts se amplia, nunca se recorta (localhost para health/tests).
+  HOSTS=$(grep -m1 '^WTM_ALLOWED_HOSTS=' "$ENVF" | cut -d= -f2-)
+  for h in "$IP" 127.0.0.1 localhost; do
+    case ",$HOSTS," in
+      *",$h,"*) : ;;
+      *) HOSTS="${HOSTS:+$HOSTS,}$h" ;;
+    esac
+  done
+  if grep -q '^WTM_ALLOWED_HOSTS=' "$ENVF"; then
+    sed -i "s#^WTM_ALLOWED_HOSTS=.*#WTM_ALLOWED_HOSTS=$HOSTS#" "$ENVF"
+  else
+    echo "WTM_ALLOWED_HOSTS=$HOSTS" >> "$ENVF"
+  fi
 fi
 log "server.env sincronizado a $IP"
 
@@ -112,19 +167,23 @@ else
   [ "$listo" -ne 1 ] && fail "El servicio no alcanzo scrcpy_alive en 60s. Mira rd-start.log y rd-bridge.log."
 fi
 
-URL="https://$IP:$PORT/#auto"
+# Tablet: si su ADB esta conectado, actualiza base_url y lanza el viewer.
+TAB=$(tablet_serial || true)
+if [ -n "${TAB:-}" ]; then
+  ui "DeX: actualizando viewer de la tablet..."
+  tablet_launch "$TAB" "$IP"
+else
+  log "tablet ADB no disponible; no actualizo prefs ni lanzo la app."
+fi
+
+URL="https://$IP:$PORT"
 termux-clipboard-set "$URL" >/dev/null 2>&1 || true
-termux-notification -t "DeX listo" --content "Abre en la tablet: $URL (tambien copiada al portapapeles)" >/dev/null 2>&1 || true
-# --- P5: la URL se entrega en un dialogo que NO se cierra solo ---------------
 FP=$(health "$IP" 2>/dev/null | tr -d '\n' | grep -oE '"tls_fingerprint": *"[^"]+"' | cut -d'"' -f4 || true)
-TOKEN_EXTRA=""
-for var in $(grep -oE '^[A-Z0-9_]*(TOKEN|PASSWORD|SECRET)[A-Z0-9_]*=' "$ENVF" 2>/dev/null | sed 's/=$//'); do
-  val=$(grep -m1 "^$var=" "$ENVF" 2>/dev/null | cut -d= -f2-)
-  [ -n "$val" ] && TOKEN_EXTRA="$TOKEN_EXTRA $var=$val"
-done
-MSG="Abre en la TABLET: $URL"
-[ -n "$TOKEN_EXTRA" ] && MSG="$MSG  ||  Clave: $TOKEN_EXTRA"
-[ -n "$FP" ] && MSG="$MSG  ||  Huella TLS: $FP"
-termux-dialog confirm -t "DeX LISTO - anota la URL" -i "$MSG" >/dev/null 2>&1 || true
-ui "DeX listo: dialogo en pantalla con la URL + copiada al portapapeles"
+MSG="Abre WTM Viewer en la TABLET (auto-conecta a $URL)."
+[ -n "$FP" ] && MSG="$MSG  Huella TLS: $FP"
+if [ "$NONINTERACTIVE" != "1" ]; then
+  termux-notification -t "DeX listo" --content "$MSG" >/dev/null 2>&1 || true
+  termux-dialog confirm -t "DeX LISTO" -i "$MSG" >/dev/null 2>&1 || true
+fi
+ui "DeX listo: $MSG"
 printf '[wizard] %s LISTO. Tablet: %s\n' "$(date '+%F %T')" "$URL"

@@ -32,12 +32,15 @@ bash install.sh        # installs packages, verifies the scrcpy server, generate
 bash ~/.shortcuts/DeX
 #    The wizard recovers ADB after a reboot (guided Wireless Debugging
 #    dialog if port 5555 is down), detects the hotspot IP, syncs server.env,
-#    verifies the tablet, starts the service, and shows the exact URL +
-#    TLS fingerprint in a persistent dialog (also copied to the clipboard).
+#    verifies the tablet, starts the service, launches the native WTM Viewer
+#    on the tablet when ADB is available (and updates its saved URL), then
+#    shows the URL + TLS fingerprint in a persistent dialog.
 
-# 3. On the tablet, open Chrome at the URL shown by the wizard and
-#    compare the certificate fingerprint with the one shown in the wizard
-#    BEFORE entering any token.
+# 3. On the tablet, open the WTM Viewer app. The wizard updates its saved
+#    URL and launches it; it auto-connects and checks the TLS fingerprint.
+#    Browser fallback: open the URL shown by the wizard, compare the
+#    fingerprint, and enter the viewer token from
+#    ~/.config/wtm/auth-tokens.json (the wizard no longer prints tokens).
 ```
 
 **Stop:** Termux:Widget "Exit-Dex" shortcut (or `bash ~/.shortcuts/Exit-Dex`).
@@ -59,7 +62,7 @@ contains: [releases](docs/releases.md) · verified evidence:
 
 ## What is currently demonstrated
 
-- The test pair is a Samsung Galaxy S25 (`SM-S931B`, Android 16 / API 36) and Galaxy Tab
+- The test pair is a Samsung Galaxy S25 (`SM-S931B`, Android 17 / API 37) and Galaxy Tab
   S6 Lite Wi-Fi (`SM-P613`, Android 14 / API 34).
 - The phone's scrcpy virtual display is configured as 2000 x 1200 at 60 Hz. The
   encoder is configured for HEVC (H.265) by default since v0.3.0 (H.264
@@ -89,6 +92,19 @@ contains: [releases](docs/releases.md) · verified evidence:
   on this pair (2026-11-07): the phone's paired physical mouse drives the virtual
   display only — no ghost input on the phone screen, with the real Samsung cursor.
   See [bluetooth-mouse-routing.md](docs/bluetooth-mouse-routing.md).
+- **S Pen end-to-end over UHID** (2026-11-25): fingers keep using `INJECT_TOUCH`;
+  the pen is a real HID digitizer (`WTM Pen`) with 4096 pressure levels,
+  tilt/orientation, eraser and hover. Palm rejection runs in the viewer, the
+  relay and the display server, and `ACTION_HOVER_EXIT` releases the pen from
+  the phone's input range immediately so touch/mouse stay responsive after
+  drawing. PenProbe measures tool type, pressure, tilt and flags on the virtual
+  display. See [s-pen-input.md](docs/s-pen-input.md). This is engineering
+  verification on this pair, not a hardware certification.
+- **Current pinned profile (2026-11-25)**: `WTM_PIN_PROFILE=1` applies
+  2000x1200@60 and 35 Mbps only after verifying the live scrcpy cmdline
+  (`cap_ack: applied=true`). On the current pair the viewer HUD reports about
+  5 ms render latency, ~4 ms RTT and zero `rdrop`/`qdrop` on a static probe;
+  this is video-path telemetry, not a pen-to-photon measurement.
 - HEVC decoding capability on the tablet was probed and confirmed (2026-11-08, Chrome
   156), and the H.264-vs-HEVC A/B was then **measured on this pair (2026-11-09)**:
   for the tested content class, HEVC decoded ~30% faster with ~3x lower jitter peaks
