@@ -109,3 +109,34 @@ y aparecer el perfil aplicado (HUD verde). Luego:
 - **Auto-relanzamiento**: si la sesión scrcpy muere en <3 s (carrera de
   arranque), el relay relanza `scrcpy-phone.sh` en vez de reconectar a un
   forward muerto.
+
+### Causa raíz del "ni táctil ni S Pen" (resuelta 2026-11-25)
+
+El viewer emitía `pd/pm/pu/ph` (verificado con logcat) pero **nada llegaba al
+relay**. `PenForwarder.onTouch` corre en el hilo de UI y `WsClient.sendRaw`
+escribía el socket TLS desde ahí: Android lanza `NetworkOnMainThreadException`,
+que el `catch (_: Exception) {}` descartaba en silencio. Fix en `WsClient`:
+`sendInput` usa un executor de un solo hilo (`wtm-input`, orden conservado) y
+`sendRaw` registra errores en logcat (`sendRaw error: ...`).
+
+Cadena verificada tras el fix (`logcat -s WTM` + log del relay):
+
+```
+onTouch masked=0 x=600 y=500 tool=1 sw=2000 sh=1200
+emit act=0 tool=1 pen=false
+[ws] msg pd {"t":"pd",...,"x":600,"y":500,"p":1.0000,"pt":"finger"}
+[ws] msg pd {"t":"pd",...,"x":140,"y":210,...}   # tap -> abre Ajustes en el S25
+[ws] msg ph {"t":"ph","a":7,...,"pt":"stylus","or":-1.5708}   # hover del S Pen
+```
+
+También corregido: `WsClient.login` manda `Origin` sin puerto (tolerado por el
+relay), `sendRaw` sincronizado, `onConfig` asigna `streamW/H`, tool-type UNKNOWN
+aceptado y auto-conexión al abrir la app. APK: `viewer-apk.yml` en Actions.
+
+### Nota operativa: dos redes
+
+El relay escucha en `0.0.0.0` con `WTM_ALLOWED_HOSTS` para hotspot y router. La
+URL de la app debe ser la del interfaz por el que entra la tablet:
+`https://<ip-hotspot>:8443` (tablet en el hotspot) o `https://<ip-router>:8443`
+(tablet en el WiFi de casa). Si la app muestra "failed to connect", casi siempre
+es esto.
