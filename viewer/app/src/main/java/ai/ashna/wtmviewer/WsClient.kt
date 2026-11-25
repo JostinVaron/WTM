@@ -48,6 +48,7 @@ class WsClient(
     private var socket: SSLSocket? = null
     private val closed = AtomicBoolean(false)
     private var sessionCookie: String = ""
+    private var dbg = 0
 
     /** Mensaje cap listo para enviar (F4b); se envia una vez tras el login. */
     @Volatile private var pendingCapJson: String? = null
@@ -56,7 +57,13 @@ class WsClient(
     fun setCap(json: String) { pendingCapJson = json }
 
     /** F5: canal de input (pd/pm/pu/ph) por el mismo WebSocket del stream. */
-    fun sendInput(json: String) = sendJson(json)
+    fun sendInput(json: String) {
+        if (dbg < 30) {
+            dbg++
+            android.util.Log.d("WTM", "sendInput socket=${socket != null} $json")
+        }
+        sendJson(json)
+    }
 
     // --- reloj/latencia (v1.1-perf1) ---
     @Volatile private var offsetMs = 0.0
@@ -365,7 +372,9 @@ class WsClient(
             out.write(header.toByteArray())
             out.write(data)
             out.flush()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            if (dbg < 40) { dbg++; android.util.Log.d("WTM", "sendRaw error: $e") }
+        }
     }
 
     fun close() {
