@@ -32,9 +32,29 @@ tiene writer: send() es no-op seguro.
 # Acciones scrcpy permitidas (las que envia PenForwarder.kt).
 _ALLOWED_ACT = (0, 1, 2, 3, 7)
 
+# Diagnostico acotado: los 3 primeros mensajes de la sesion, nada mas.
+_seen = 0
+
+
+def _srv_module():
+    """Modulo server REAL del proceso.
+
+    server.py corre como `python3 server.py`, asi que sus globales viven en
+    __main__. Un `import server` cargaria una SEGUNDA instancia del modulo con
+    su propio scrcpy_control (writer=None): send() descartaria el trazo en
+    silencio. Preferimos __main__ y caemos a `server` solo si se importa como
+    libreria (tests).
+    """
+    import sys
+    mod = sys.modules.get("__main__")
+    if mod is not None and hasattr(mod, "scrcpy_control"):
+        return mod
+    import server
+    return server
+
 
 def _handle(state, data):
-    import server as _srv
+    _srv = _srv_module()
     act = int(data.get("a", -1))
     if act not in _ALLOWED_ACT:
         return
@@ -58,6 +78,11 @@ def _handle(state, data):
 
 async def handle(state, data):
     """Entry point del dispatch de server.py para pd/pm/pu/ph."""
+    global _seen
+    if _seen < 3:
+        _seen += 1
+        print(f"[pen] msg {data.get('t')} pid={data.get('pid')} "
+              f"x={data.get('x')} y={data.get('y')}", flush=True)
     try:
         _handle(state, data)
     except Exception as e:

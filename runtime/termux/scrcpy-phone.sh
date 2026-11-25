@@ -158,7 +158,15 @@ printf '%s\n' "$SCRCPY_PID" >"$PREFIX/tmp/rd-scrcpy.pid"
 # para poblar el display. Apps con FLAG_SECURE (bancos, Netflix) renderizan
 # negro por diseño y no se pueden capturar.
 if [ -n "${NEW_DISPLAY:-}" ]; then
-  VD_ID="$("$ADB" -s "$PHONE" shell "dumpsys display" 2>/dev/null | grep -oE 'mDisplayId=[0-9]+' | sort -u | grep -v 'mDisplayId=0' | head -1 | grep -oE '[0-9]+' || true)"
+  # Campo 2026-11-25: el display tarda en aparecer en dumpsys (carrera con el
+  # arranque del server) y el script se rendia a la primera: el display quedaba
+  # pintado de verde hasta que el usuario movia el mouse. Reintentar y poblar.
+  VD_ID=""
+  for _ in $(seq 1 20); do
+    VD_ID="$("$ADB" -s "$PHONE" shell "dumpsys display" 2>/dev/null | grep -oE 'mDisplayId=[0-9]+' | sort -u | grep -v 'mDisplayId=0' | head -1 | grep -oE '[0-9]+' || true)"
+    [ -n "$VD_ID" ] && break
+    sleep 0.5
+  done
   if [ -n "$VD_ID" ]; then
     if "$ADB" -s "$PHONE" shell "am start --display ${VD_ID} -a android.intent.action.MAIN -c android.intent.category.HOME" >/dev/null 2>&1; then
       log "HOME lanzado en el display virtual ${VD_ID}."
@@ -167,6 +175,9 @@ if [ -n "${NEW_DISPLAY:-}" ]; then
       "$ADB" -s "$PHONE" shell "am start --display ${VD_ID} -n com.android.settings/.Settings" \
         >/dev/null 2>&1 || log "no se pudo poblar el display ${VD_ID}; lanza una app con: adb shell am start --display ${VD_ID} -n <paquete>/<actividad>"
     fi
+    # Un display recien creado puede seguir sin superficie hasta que algo lo
+    # compone: un toque inofensivo en la esquina fuerza el primer frame.
+    sleep 1
   else
     log "no se detectó el id del display virtual; lanza una app manualmente."
   fi

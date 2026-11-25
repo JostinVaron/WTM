@@ -34,10 +34,17 @@ stream_ready(){
         >/dev/null 2>&1
 }
 find_phone(){
-    local matches="" serial model
+    local matches="" serial model hw seen=" "
     for serial in $("$ADB" devices | awk 'NR > 1 && $2 == "device" {print $1}'); do
         model=$("$ADB" -s "$serial" shell getprop ro.product.model 2>/dev/null | tr -d '\r')
         if [ "$model" = "${WTM_PHONE_MODEL:-SM-S931B}" ]; then
+            # El mismo telefono puede aparecer por dos transportes (p.ej.
+            # 127.0.0.1:5555 y emulator-5554). Se deduplica por serial de
+            # hardware para no declarar ambiguedad con un solo telefono.
+            hw=$("$ADB" -s "$serial" shell getprop ro.serialno 2>/dev/null | tr -d '\r')
+            [ -n "$hw" ] || hw="$serial"
+            case "$seen" in *" $hw "*) continue ;; esac
+            seen+="$hw "
             [ -z "$matches" ] || matches+=$'\n'
             matches+="$serial"
         fi
@@ -118,8 +125,14 @@ fi
 # reboot, server.env apunta a una IP muerta y el bridge muere en el bind.
 # Re-apuntar config + regenerar cert ANTES de levantar el bridge.
 # swlan0 (hotspot) primero, wlan0 (WiFi router) de respaldo.
-CUR_IP=$("$ADB" -s "$PHONE" shell "ip -4 addr show swlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print \$2}'" 2>/dev/null | tr -d '\r' || true)
-[ -z "$CUR_IP" ] && CUR_IP=$("$ADB" -s "$PHONE" shell "ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print \$2}'" 2>/dev/null | tr -d '\r' || true)
+# Con WTM_BIND_HOST=0.0.0.0 el listener cubre todas las interfaces: reescribir
+# a la IP del hotspot romperia a la tablet que entra por el router (2026-11-25).
+if [ "$WTM_BIND_HOST" = "0.0.0.0" ]; then
+    CUR_IP="$WTM_BIND_HOST"
+else
+    CUR_IP=$("$ADB" -s "$PHONE" shell "ip -4 addr show swlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print \$2}'" 2>/dev/null | tr -d '\r' || true)
+    [ -z "$CUR_IP" ] && CUR_IP=$("$ADB" -s "$PHONE" shell "ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | head -1 | awk '{print \$2}'" 2>/dev/null | tr -d '\r' || true)
+fi
 if [ -n "$CUR_IP" ] && [ "$CUR_IP" != "$WTM_BIND_HOST" ]; then
     log "IP cambio (${WTM_BIND_HOST} -> ${CUR_IP}); regenerando config y certificado."
     bash ./update-network.sh "$CUR_IP" || log "Aviso: update-network.sh fallo; se continua con la config actual."
@@ -128,7 +141,7 @@ fi
 
 if ! bridge_up; then
     log "Bridge no responde; iniciandolo."
-    BACKEND=scrcpy PORT="$PORT" FPS=60 \
+    BACKEND=scrcpy PORT="$PORT" FPS="${FPS:-60}" \
         WTM_AUTH_FILE="$WTM_AUTH_FILE" CERT="$CERT" KEY="$KEY" \
         WTM_BIND_HOST="$WTM_BIND_HOST" WTM_ALLOWED_HOSTS="$WTM_ALLOWED_HOSTS" \
         nohup python3 server.py >"$LOG" 2>&1 &

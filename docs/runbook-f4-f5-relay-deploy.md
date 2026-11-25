@@ -6,7 +6,7 @@ Estado al 2026-11-25: la APK v1.3-pen está instalada en la tablet y el dispatch
 
 ## Contexto
 
-- El viewer (tablet) se conecta a `https://10.99.18.238:8443/#auto` (relay en el S25, Termux).
+- El viewer (tablet) se conecta a `https://<phone-ip>:8443/#auto` (relay en el S25, Termux).
 - El clon git del S25 está en `~/WTM` (rama `feat/cap-negotiation-f3`).
 - El relay **no corre desde `~/WTM`**: corre desde `/data/data/com.termux/files/home/dex`
   (verificado con `readlink /proc/$PID/cwd`, PID 24447). `~/dex` **no es repo git**
@@ -57,7 +57,7 @@ Verificación de que levantó:
 
 ```sh
 pgrep -f "python3 server.py"
-curl -sk https://10.99.18.238:8443/healthz && echo " RELAY OK"
+curl -sk https://<phone-ip>:8443/healthz && echo " RELAY OK"
 ```
 
 ## Paso 3 — Verificar con el viewer
@@ -75,7 +75,7 @@ y aparecer el perfil aplicado (HUD verde). Luego:
   relay corriendo (bien). Mátalo con `pkill -f "python3 server.py"` y relanza.
 - **`No such file or directory: ~/dex/capd`**: solo ocurre con `backend=hw`;
   el launcher real usa scrcpy. No es bloqueante si arrancas por `dex.sh`.
-- **Viewer `Failed to connect`**: relay muerto (paso 2) o la IP `10.99.18.238`
+- **Viewer `Failed to connect`**: relay muerto (paso 2) o la IP `<phone-ip>`
   cambió (verificar en el S25: `ip addr`; actualizar URL en la app).
 - **Ver código que corre un PID**: `readlink /proc/<PID>/cwd` y
   `grep -c pen_handler <cwd>/server.py`.
@@ -87,3 +87,25 @@ y aparecer el perfil aplicado (HUD verde). Luego:
   Android tipo Krita).
 - X11 + IA para ArtCraft en proot (otra sesión).
 - Desplegar de forma duradera el update de `~/dex` (hoy: copia manual de 3 archivos).
+
+## Actualización 2026-11-25 (sesión de campo)
+
+- **APK compilado en CI**: `viewer-apk.yml` (workflow_dispatch) construye
+  `app-debug.apk` con el SDK de GitHub Actions. Ya no hace falta SDK en Termux.
+  Versión `0.1.1-pen2` (versionCode 2): `sendRaw` sincronizado, tool-type
+  UNKNOWN aceptado y auto-conexión al abrir (sin pulsar "Conectar").
+- **`ScrcpyLauncher` corregido**: el `scrcpy.Server` vive en el TELÉFONO, no en
+  Termux; antes se buscaba con `pgrep` local y la negociación `cap` siempre
+  respondía `applied:false`. Ahora lee `/proc/<pid>/cmdline` por `adb -s <phone>`.
+- **Perfil fijado**: `WTM_PIN_PROFILE=1` en `server.env` aplica
+  `NEW_DISPLAY`/`BITRATE`/`FPS` del operador (2000x1200@60, 35 Mbps) y verifica
+  el cmdline real antes de responder `cap_ack`.
+- **`Origin` sin puerto**: el viewer manda `https://<ip>` en `/api/auth`; el
+  middleware tolera el puerto implícito solo para el mismo esquema+host.
+- **Mouse BT**: `server.py` re-ejecuta `route-input.sh` al recibir la config de
+  cada sesión scrcpy (la asociación es per-display y moría en cada relanzamiento).
+- **Pantalla verde inicial**: `scrcpy-phone.sh` reintenta la detección del
+  display virtual (~10 s) y lanza HOME/Ajustes para poblarlo.
+- **Auto-relanzamiento**: si la sesión scrcpy muere en <3 s (carrera de
+  arranque), el relay relanza `scrcpy-phone.sh` en vez de reconectar a un
+  forward muerto.

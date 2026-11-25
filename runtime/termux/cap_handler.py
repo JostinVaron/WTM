@@ -25,6 +25,7 @@ Politicas implementadas (todas del plan F2 aprobado):
 import asyncio
 import json
 import os
+import re
 import time
 
 import stream_profile
@@ -85,10 +86,67 @@ def _get_relay():
     return _relay
 
 
+def _pinned_profile():
+    """Perfil fijado por el operador (WTM_PIN_PROFILE=1), o None.
+
+    El viewer instalado calcula su propio techo "visualmente lossless"
+    (W*H*fps*0.1bpp = 14.4 Mbps para 1200x2000@60) y reporta la resolucion
+    NATURAL del panel (vertical), mientras la app solo corre en landscape
+    2000x1200. Con el pin activo el relay sigue validando el cap del viewer
+    (anti-abuso) pero aplica el perfil de produccion del operador
+    (NEW_DISPLAY/BITRATE/FPS de server.env) y lo verifica contra el cmdline
+    real antes de decir applied:true: nunca hay verde falso.
+    """
+    if os.environ.get("WTM_PIN_PROFILE", "").strip().lower() not in (
+            "1", "true", "yes", "on"):
+        return None
+    m = re.match(r"\s*(\d+)x(\d+)", os.environ.get("NEW_DISPLAY", ""))
+    if not m:
+        return None
+    try:
+        fps = float(os.environ.get("FPS", "60"))
+        bitrate = int(os.environ.get("BITRATE", "0"))
+    except (TypeError, ValueError):
+        return None
+    if bitrate <= 0:
+        return None
+    return {"w": int(m.group(1)), "h": int(m.group(2)),
+            "fps": fps, "bitrate": bitrate}
+
+
+def _apply_pinned(relay, pinned, msg):
+    """Aplica el perfil fijado (si no esta ya) y ack honesto verificado."""
+    global _last_launch_monotonic
+    try:
+        stream_profile.validate_cap(msg)   # el cap del viewer sigue validando
+    except stream_profile.CapError as err:
+        return {"t": "cap_ack", "applied": False, "profile": relay.applied,
+                "reason": f"cap_rechazado: {err}"}
+
+    cmdline = relay.launcher.read_cmdline()
+    active = stream_profile.parse_cmdline(cmdline) if cmdline else None
+    if not (active and stream_profile.same_profile(active, pinned)):
+        relay.launcher.launch(pinned)
+        _last_launch_monotonic = time.monotonic()
+        cmdline = relay.launcher.read_cmdline()
+        active = stream_profile.parse_cmdline(cmdline) if cmdline else None
+
+    ok, why = stream_profile.verify_cmdline(pinned, cmdline or "")
+    if ok:
+        relay.applied = dict(active)   # ack = lo que corre de verdad
+        return {"t": "cap_ack", "applied": True, "profile": relay.applied,
+                "reason": "perfil del operador fijado y verificado via cmdline"}
+    return {"t": "cap_ack", "applied": False, "profile": active,
+            "reason": f"perfil fijado no verificado: {why}"}
+
+
 def _handle_sync(msg, device):
     """Ejecuta la negociacion (bloqueante: relanza procesos)."""
     global _last_launch_monotonic
     relay = _get_relay()
+    pinned = _pinned_profile()
+    if pinned is not None:
+        return _apply_pinned(relay, pinned, msg)
     launches_before = relay.launcher.launches
     ack = relay.handle_cap(msg, device)
     if relay.launcher.launches > launches_before:
@@ -112,6 +170,12 @@ async def handle(state, ws, data):
         # launch() mata y relanza scrcpy (bloqueante hasta 10 s): fuera del loop
         ack = await loop.run_in_executor(None, _handle_sync, data, device)
     try:
+        # El viewer F4b identifica los frames con optString("type") y, como
+        # optString NO devuelve null sino "", el fallback a "t" nunca ocurre:
+        # un ack solo con "t" se ignora y el HUD queda en "esperando relay".
+        # Se envian ambas claves para compatibilidad total.
+        ack = dict(ack)
+        ack.setdefault("type", "cap_ack")
         await ws.send_str(json.dumps(ack))
     except Exception:
         pass  # el viewer se desconecto a mitad de la negociacion: no importa
