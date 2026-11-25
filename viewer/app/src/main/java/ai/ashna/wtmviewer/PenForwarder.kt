@@ -9,84 +9,133 @@ import kotlin.math.roundToInt
  * Captura TODOS los punteros del panel (S Pen + dedos) y los reenvia al
  * relay como mensajes pd/pm/pu/ph (F5).
  *
- * Fidelidad del S Pen que preserva:
- *  - presion real (4096 niveles): viaja como "p" 0.0..1.0 sin cuantizar
- *  - eventos historicos: el digitizador muestrea ~120 Hz aunque los frames
- *    lleguen a 60 — se reenvia CADA muestra, el trazo llega suave
- *  - tilt ("tl") y orientacion ("or") del stylus: hoy el touch del scrcpy
- *    no las inyecta, pero viajan en el mensaje para el backend X11
- *  - rechazo de palma: TOOL_TYPE_PALM se descarta (el digitizador Samsung
- *    ya lo marca); solo stylus y dedos dibujan
- *  - multi-touch: un pid por puntero (estable durante todo el gesto)
- *  - "a" es la accion enmascarada de MotionEvent (0/1/2/3/5/6/10): el
- *    relay queda stateless y no hay estado sucio tras reconectar
+ * Mapeo a la accion del protocolo scrcpy (un mensaje por puntero, como
+ * parte los MotionEvents el cliente scrcpy original):
+ *   DOWN / POINTER_DOWN -> pd  a=0   (el puntero nace con su pid estable)
+ *   MOVE  (con muestras historicas ~120 Hz) -> pm a=2
+ *   UP / POINTER_UP     -> pu  a=1
+ *   CANCEL              -> pu  a=3
+ *   HOVER_MOVE (stylus levantado, via onGenericMotion) -> ph a=7
  *
- * HUD: se alterna con el BOTON LATERAL del S Pen (BUTTON_STYLUS_PRIMARY);
- * ningun toque se consume localmente — todo lo que toca la pantalla viaja
- * al S25.
+ * Fidelidad del S Pen que preserva:
+ *  - presion real (4096 niveles): viaja como "p" 0.0..1.0 SIN cuantizar
+ *  - eventos historicos: el digitizador muestrea mas rapido que el frame
+ *    rate — se reenvia CADA muestra, el trazo llega suave aunque el video
+ *    corra a 60 fps
+ *  - tilt ("tl") y orientacion ("or"): hoy el touch del scrcpy no las
+ *    inyecta, pero viajan en el mensaje para el backend X11 futuro
+ *  - rechazo de palma: TOOL_TYPE_PALM se descarta (el digitizador ya lo
+ *    marca); solo stylus y finger dibujan
+ *  - multi-touch: un pid por puntero, estable durante todo el gesto
+ *
+ * HUD: se alterna tocando la esquina superior derecha (la zona del
+ * propio HUD — ese gesto se consume localmente, NO viaja al S25) o con
+ * el boton lateral del S Pen en plumas que lo tengan. Todo lo demas
+ * viaja integro: ningun trazo se roba.
  */
 class PenForwarder(
     private val view: View,
     private val streamW: () -> Int,
     private val streamH: () -> Int,
     private val send: (String) -> Unit,
-    private val onStylusButton: () -> Unit
+    private val onHudToggle: () -> Unit
 ) : View.OnTouchListener {
 
+    companion object {
+        /** Zona HUD: esquina superior derecha, ~56dp. */
+        private const val HUD_DP = 56
+    }
+
     private var prevStylusBtn = false
+
+    /** pid del gesto que esta siendo consumido por la zona HUD (no viaja). */
+    private var suppressPid = -1
 
     override fun onTouch(v: View, ev: MotionEvent): Boolean {
         // Despacho sin buffer: menor latencia en trazos rapidos.
         try { v.requestUnbufferedDispatch(ev) } catch (_: Exception) {}
 
+        checkStylusButton(ev)
+
+        val masked = ev.actionMasked
+
+        // Zona HUD: DOWN de un solo puntero dentro de la esquina sup-derecha
+        // -> toggle local; el gesto completo se consume (no viaja al S25).
+        if (suppressPid >= 0) {
+            val pidStill = (0 until ev.pointerCount)
+                .any { ev.getPointerId(it) == suppressPid }
+            when {
+                masked == MotionEvent.ACTION_UP ||
+                    masked == MotionEvent.ACTION_CANCEL -> { suppressPid = -1; return true }
+                !pidStill -> suppressPid = -1   // el pid desaparecio: seguir normal
+                else -> return true             // resto del gesto consumido
+            }
+        }
+        if (masked == MotionEvent.ACTION_DOWN) {
+            val hudPx = view.resources.displayMetrics.density * HUD_DP
+            if (ev.x >= view.width - hudPx && ev.y <= hudPx) {
+                suppressPid = ev.getPointerId(0)
+                onHudToggle()
+                return true
+            }
+        }
+
         val sw = streamW()
         val sh = streamH()
         if (sw <= 0 || sh <= 0) return true   // aun no llega el config del stream
 
-        val masked = ev.actionMasked
-        val hover = masked == MotionEvent.ACTION_HOVER_MOVE ||
-            masked == MotionEvent.ACTION_HOVER_ENTER
-
-        // Boton lateral del S Pen: alterna el HUD sin robar el trazo.
-        val stylusBtn = (ev.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
-        if (stylusBtn && !prevStylusBtn) onStylusButton()
-        prevStylusBtn = stylusBtn
-
-        // 1) Muestras historicas (~120 Hz): solo son movimiento.
-        if (!hover) {
+        // 1) Muestras historicas (~120 Hz) — solo en MOVE: el conjunto de
+        //    punteros no cambia, getHistorical* es valido para todos.
+        if (masked == MotionEvent.ACTION_MOVE) {
             for (h in 0 until ev.historySize) {
-                for (i in 0 until ev.pointerCount) emit(ev, i, h, "pm", 2, sw, sh)
+                for (i in 0 until ev.pointerCount) emit(ev, i, h, 2, sw, sh)
             }
         }
 
-        // 2) Evento actual.
+        // 2) Evento actual -> mensajes por puntero.
         when (masked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
-                for (i in 0 until ev.pointerCount) {
-                    if (i == ev.actionIndex) emit(ev, i, -1, "pd", masked, sw, sh)
-                    else emit(ev, i, -1, "pm", 2, sw, sh)
-                }
-            }
+            MotionEvent.ACTION_DOWN -> emit(ev, 0, -1, 0, sw, sh)
+            MotionEvent.ACTION_POINTER_DOWN -> emit(ev, ev.actionIndex, -1, 0, sw, sh)
             MotionEvent.ACTION_MOVE ->
-                for (i in 0 until ev.pointerCount) emit(ev, i, -1, "pm", 2, sw, sh)
-            MotionEvent.ACTION_POINTER_UP ->
-                emit(ev, ev.actionIndex, -1, "pu", masked, sw, sh)
-            MotionEvent.ACTION_UP ->
-                emit(ev, 0, -1, "pu", masked, sw, sh)
+                for (i in 0 until ev.pointerCount) emit(ev, i, -1, 2, sw, sh)
+            MotionEvent.ACTION_POINTER_UP -> emit(ev, ev.actionIndex, -1, 1, sw, sh)
+            MotionEvent.ACTION_UP -> emit(ev, 0, -1, 1, sw, sh)
             MotionEvent.ACTION_CANCEL ->
-                for (i in 0 until ev.pointerCount) emit(ev, i, -1, "pu", 1, sw, sh)
-            MotionEvent.ACTION_HOVER_MOVE, MotionEvent.ACTION_HOVER_ENTER ->
-                for (i in 0 until ev.pointerCount) {
-                    if (ev.getToolType(i) == MotionEvent.TOOL_TYPE_STYLUS) {
-                        emit(ev, i, -1, "ph", 10, sw, sh)
-                    }
-                }
+                for (i in 0 until ev.pointerCount) emit(ev, i, -1, 3, sw, sh)
         }
         return true
     }
 
-    /** Un pointer de una muestra -> un mensaje. h >= 0: muestra historica. */
-    private fun emit(ev: MotionEvent, i: Int, h: Int, t: String, act: Int, sw: Int, sh: Int) {
+    /** Hover del stylus (pluma levantada cerca del panel): generic motion. */
+    fun onGeneric(ev: MotionEvent): Boolean {
+        checkStylusButton(ev)
+        val masked = ev.actionMasked
+        if (masked == MotionEvent.ACTION_HOVER_MOVE ||
+            masked == MotionEvent.ACTION_HOVER_ENTER) {
+            val sw = streamW()
+            val sh = streamH()
+            if (sw <= 0 || sh <= 0) return true
+            for (i in 0 until ev.pointerCount) {
+                if (ev.getToolType(i) == MotionEvent.TOOL_TYPE_STYLUS) {
+                    emit(ev, i, -1, 7, sw, sh)
+                }
+            }
+        }
+        return true
+    }
+
+    /** Boton lateral del S Pen (plumas que lo tienen): toggle del HUD. */
+    private fun checkStylusButton(ev: MotionEvent) {
+        val b = (ev.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
+        if (b && !prevStylusBtn) onHudToggle()
+        prevStylusBtn = b
+    }
+
+    /**
+     * Un pointer de una muestra -> un mensaje pd/pm/pu/ph segun "act".
+     * h >= 0: muestra historica (solo MOVE). act: accion scrcpy 0/1/2/3/7.
+     */
+    private fun emit(ev: MotionEvent, i: Int, h: Int, act: Int, sw: Int, sh: Int) {
         val tool = ev.getToolType(i)
         if (tool == MotionEvent.TOOL_TYPE_PALM) return   // rechazo de palma
         if (tool != MotionEvent.TOOL_TYPE_STYLUS && tool != MotionEvent.TOOL_TYPE_FINGER) return
@@ -100,8 +149,9 @@ class PenForwarder(
         val y = (rawY * sh / vh).roundToInt()
 
         var p = if (h >= 0) ev.getHistoricalPressure(i, h) else ev.getPressure(i)
-        if (act == 1 || act == 3) p = 0f
-        if (!p.isFinite() || p < 0f) p = 0f
+        if (act == 1 || act == 3) p = 0f          // up/cancel
+        if (act == 7) p = 1f                       // hover
+        if (!p.isFinite() || p < 0f) p = if (act == 7) 1f else 0f
         if (p > 1f) p = 1f
 
         val stylus = tool == MotionEvent.TOOL_TYPE_STYLUS
@@ -116,6 +166,12 @@ class PenForwarder(
             if (!or.isFinite()) or = 0f
         }
 
+        val t = when (act) {
+            0 -> "pd"
+            1, 3 -> "pu"
+            7 -> "ph"
+            else -> "pm"
+        }
         val pt = if (stylus) "stylus" else "finger"
         send("{\"t\":\"$t\",\"a\":$act,\"pid\":${ev.getPointerId(i)}," +
             "\"x\":$x,\"y\":$y,\"p\":${fmt(p)},\"pt\":\"$pt\"," +

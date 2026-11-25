@@ -7,7 +7,6 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
-import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -33,25 +32,20 @@ import javax.net.ssl.X509TrustManager
 /**
  * WTM Viewer — viewer nativo del relay (issue #16).
  *
- * v1.1-perf3 — COLA ACOTADA: el HUD ahora reporta qdrop (deltas
- * descartados por cola llena, con keyframe fresco pedido al server)
- * junto a rdrop y cola. Basado en el log perf2 de campo: bitrate real
- * 35 Mbps (no 12 como el default publicado), pipeline estable a 60 fps
- * con 0 corrupcion, y cola que crecia a 75 frames sin disparar drops.
+ * v1.2-cap (F4b) — PANTALLA COMPLETA ABSOLUTA + NEGOCIACION cap.
  *
- * v1.2-cap (F4b) — PANTALLA COMPLETA ABSOLUTA + NEGOCIACION cap:
- * - immersive sticky en ambos estados (config y video): la barra fina
- *   de navegacion inferior desaparece y el SurfaceView ocupa TODO el
- *   panel. Se re-aplica en onWindowFocusChanged porque Android la
- *   restaura al abrir teclado o tras gestos del sistema.
- * - Al conectar se lee el hardware real (DeviceCapabilities), se arma
- *   el cap (StreamProfile) y se envia; el HUD muestra el veredicto del
- *   cap_ack (verde = aplicado y verificado, rojo = no aplicado + motivo).
+ * v1.3-pen (F5) — S PEN Y MULTI-TOUCH COMPLETOS: TODO lo que toca el panel
+ * viaja al S25 (PenForwarder): presion real (4096 niveles), muestras
+ * historicas (~120 Hz), tilt/orientacion del stylus, rechazo de palma,
+ * multi-touch con pid estable y hover de la pluma. El HUD se alterna con
+ * un toque en la esquina superior derecha (zona del propio HUD — consumida
+ * localmente) o con el boton del S Pen (plumas que lo tienen): ningun
+ * trazo dibujante se roba.
  */
 class MainActivity : Activity() {
 
     companion object {
-        const val BUILD = "1.2-cap"
+        const val BUILD = "1.3-pen"
     }
 
     private lateinit var prefs: SharedPreferences
@@ -69,6 +63,10 @@ class MainActivity : Activity() {
     private var lastRendered = 0L
     private var lastRenderedAt = 0L
     private var measurePersist = 0
+
+    // F5: dimensiones del stream (para mapear tablet -> pantalla del S25).
+    @Volatile private var streamW = 0
+    @Volatile private var streamH = 0
 
     // F4b: veredicto de la negociacion cap para el HUD (jamas verde falso).
     @Volatile private var capHudLine = "perfil: esperando respuesta del relay..."
@@ -221,6 +219,8 @@ class MainActivity : Activity() {
         synchronized(logBuf) { logBuf.setLength(0) }
         persistLog()
         backBtn = null
+        streamW = 0
+        streamH = 0
         capHudLine = "perfil: esperando respuesta del relay..."
 
         val surfaceView = SurfaceView(this)
@@ -235,7 +235,8 @@ class MainActivity : Activity() {
         }
         overlay = statusOverlay
 
-        // HUD de perf: esquina superior derecha, tap para alternar.
+        // HUD de perf: esquina superior derecha. F5: ahora se alterna
+        // tocando esa misma esquina (PenForwarder) o con el boton del S Pen.
         val hudView = TextView(this).apply {
             setTextColor(Color.parseColor("#7FFF7F"))
             typeface = Typeface.MONOSPACE
@@ -277,19 +278,23 @@ class MainActivity : Activity() {
         enterImmersive()   // F4b: fullscreen ABSOLUTO en el estado de video
         showStatus("viewer v$BUILD — conectando a $url")
 
-        // Tap sobre el video alterna el HUD (hasta v1.2 tactil / v1.3 overlay 2 dedos).
-        surfaceView.setOnTouchListener { _, ev ->
-            if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+        // F5: TODA la pantalla reenvia trazos al S25 (S Pen con presion,
+        // multi-touch, hover). El HUD se alterna desde la esquina sup-derecha
+        // (zona del propio HUD, consumida localmente) o con el boton del S Pen.
+        val penFwd = PenForwarder(
+            view = surfaceView,
+            streamW = { streamW },
+            streamH = { streamH },
+            send = { json -> wsClient?.sendInput(json) },
+            onHudToggle = {
                 hudVisible = !hudVisible
                 runOnUiThread { hud?.visibility = if (hudVisible) View.VISIBLE else View.GONE }
             }
-            true
-        }
+        )
+        surfaceView.setOnTouchListener(penFwd)
+        surfaceView.setOnGenericMotionListener { _, ev -> penFwd.onGeneric(ev) }
 
-        // F4b: leer el hardware REAL del receptor y armar el cap. En
-        // fullscreen absoluto, Display.getSupportedModes() reporta los
-        // pixeles verdaderos del panel (2000x1200, no la ventana recortada
-        // por la navigation bar).
+        // F4b: leer el hardware REAL del receptor y armar el cap.
         val capReport = DeviceCapabilities(this).read()
         val cap = StreamProfile.buildCap(capReport)
         logMeasure("cap: panel ${capReport.panelW}x${capReport.panelH}@${capReport.refreshExact} " +
@@ -319,14 +324,14 @@ class MainActivity : Activity() {
                     baseUrl = url,
                     viewerToken = token,
                     onConfig = { codec, width, height, csd ->
+                        streamW = width    // F5: mapa de tablet -> pantalla S25
+                        streamH = height
                         showStatus("stream: $codec ${width}x${height}")
                         decoder?.configure(codec, width, height, csd)
                     },
                     onFrame = { data, pts -> decoder?.feed(data, pts) },
                     onStatus = { msg -> showStatus(msg) },
-                    // F4b: veredicto del cap_ack -> HUD. Jamas verde falso:
-                    // verde SOLO si el relay dice applied tras VERIFICAR el
-                    // cmdline del scrcpy vivo.
+                    // F4b: veredicto del cap_ack -> HUD. Jamas verde falso.
                     onCapAck = { json ->
                         val ack = StreamProfile.parseCapAck(json)
                         capHudLine = StreamProfile.hudLine(ack)

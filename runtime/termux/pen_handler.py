@@ -6,28 +6,31 @@ server.py despacha aqui con 2 lineas en su dispatch WS:
         import pen_handler
         await pen_handler.handle(state, data)
 
-Mensaje del viewer (uno por pointer por muestra, ~120 Hz):
-    {"t":"pd|pm|pu|ph", "a":0, "pid":0, "x":1234, "y":567, "p":0.6250,
-     "pt":"stylus|finger", "tl":0.3, "or":1.2}
+Mensaje del viewer (uno por puntero por muestra, hasta ~120 Hz por las
+muestras historicas):
+    {"t":"pd|pm|pu|ph", "a":<accion scrcpy>, "pid":0, "x":1234, "y":567,
+     "p":0.6250, "pt":"stylus|finger", "tl":0.3, "or":1.2}
 
-x,y son pixeles de la pantalla del emisor (el viewer ya normalizo con el
-config del stream). "a" es la accion enmascarada de MotionEvent que el
-viewer calcula (0=DOWN, 1=UP, 2=MOVE, 3=CANCEL, 5=POINTER_DOWN, 6=POINTER_UP,
-10=HOVER_MOVE): el handler es STATELESS — sin estado compartido que pueda
-quedar sucio tras una reconexion.
+"a" usa las acciones del protocolo scrcpy (las que su server ya conoce,
+las mismas con que inject_scrcpy_input manda el mouse):
+    0=DOWN (nace un puntero, con su pid)   1=UP   2=MOVE   3=CANCEL
+    7=HOVER_MOVE (stylus levantado cerca del panel)
+El multi-touch no usa POINTER_DOWN/UP: cada puntero nace/muere con su
+propio DOWN/UP y su pointer_id estable — exactamente como hace el cliente
+scrcpy original al partir un MotionEvent en mensajes por puntero.
 
 "p" viaja al scrcpy tal cual: el control channel la codifica en 16-bit
-fixed point (los 4096 niveles del S Pen caben enteros). "tl"/"or"
-(tilt/orientacion del stylus) viajan para futuros backends; el touch del
-scrcpy todavia no las inyecta.
+fixed point, los 4096 niveles del S Pen caben enteros. "tl"/"or"
+(tilt/orientacion del stylus) viajan para el backend X11 futuro (hoy el
+touch del scrcpy no las inyecta).
 
-Import de server: lazy — este modulo se importa con server.py ya corriendo,
-así comparte ctrl_touch y scrcpy_control con inject_scrcpy_input. En modo X11
-scrcpy_control no tiene writer: los mensajes se descartan solos (no-op).
+Handler STATELESS: la accion la calcula el viewer, aqui no hay estado que
+pueda quedar sucio tras una reconexion. En modo X11 scrcpy_control no
+tiene writer: send() es no-op seguro.
 """
 
-# Acciones enmascaradas permitidas (las que envia PenForwarder.kt).
-_ALLOWED_ACT = (0, 1, 2, 3, 5, 6, 10)
+# Acciones scrcpy permitidas (las que envia PenForwarder.kt).
+_ALLOWED_ACT = (0, 1, 2, 3, 7)
 
 
 def _handle(state, data):
@@ -36,19 +39,20 @@ def _handle(state, data):
     if act not in _ALLOWED_ACT:
         return
     w, h = state.scrcpy_w, state.scrcpy_h
-    pid = max(0, min(9, int(data.get("pid", 0))))   # ids de dedo virtual del scrcpy
-    x = int(data.get("x", 0))
-    y = int(data.get("y", 0))
+    if w <= 0 or h <= 0:
+        return
+    pid = max(0, min(9, int(data.get("pid", 0))))   # ids de puntero virtual del scrcpy
+    x = max(0, min(int(w) - 1, int(data.get("x", 0))))
+    y = max(0, min(int(h) - 1, int(data.get("y", 0))))
     p = float(data.get("p", 1.0))
-    if p != p or p < 0.0:                            # NaN o negativo -> valor seguro
-        p = 0.0 if act in (1, 3) else 1.0
-    p = min(1.0, p)
-    if act in (1, 3):                                # up/cancel: presion 0 (como el path existente)
+    if act == 7:          # hover: como el path del mouse existente
+        p = 1.0
+    elif act in (1, 3):    # up/cancel: presion 0 (como el path existente)
         p = 0.0
-    elif act == 10:                                  # hover: como el hover del mouse existente
-        p = 1.0
-    elif act in (0, 5) and p <= 0.0:                 # un down con p=0 puede ignorarse arriba
-        p = 1.0
+    else:
+        if p != p or p < 0.0:      # NaN o negativo -> valor seguro
+            p = 1.0
+        p = min(1.0, p)
     _srv.scrcpy_control.send(_srv.ctrl_touch(act, x, y, w, h, p, pid))
 
 

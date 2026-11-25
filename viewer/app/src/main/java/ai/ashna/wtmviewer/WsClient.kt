@@ -21,18 +21,15 @@ import kotlin.concurrent.thread
  * WebSocket minimo (RFC 6455) sobre socket TLS para hablar con el relay WTM.
  * Mismo protocolo que el cliente web (server.py / hevc.py).
  *
- * v1.1-perf3 — GATE del offset de reloj: perf2 mostro lecturas "lat
- * -215.9 ms" durante los primeros ~6 s, artefacto del offset NTP aun sin
- * converger (las primeras muestras de sync todavia no han llegado). Ahora
- * la latencia por frame solo se reporta tras >=5 muestras de sync validas;
- * antes de eso el HUD muestra lat 0.0 (sin dato), no un numero falso.
- *
  * v1.2-cap (F4b) — NEGOCIACION cap/cap_ack: tras el login se envia el cap
  * del hardware del receptor (StreamProfile.capJson); el relay clampa al
  * techo del emisor, aplica y VERIFICA contra el cmdline del scrcpy vivo, y
  * responde cap_ack. onCapAck lleva el veredicto al HUD (jamas verde falso).
  * Compatibilidad: si el relay es viejo y no conoce "cap", simplemente no
  * responde — el HUD queda en "sin respuesta del relay" y el stream sigue.
+ *
+ * v1.3-pen (F5) — CANAL DE INPUT: sendInput() expone el mismo WebSocket al
+ * PenForwarder (pd/pm/pu/ph, un mensaje por puntero con presion/tilt reales).
  */
 class WsClient(
     private val baseUrl: String,
@@ -57,6 +54,9 @@ class WsClient(
 
     /** MainActivity lo fija antes de connect(): el cap del hardware real. */
     fun setCap(json: String) { pendingCapJson = json }
+
+    /** F5: canal de input (pd/pm/pu/ph) por el mismo WebSocket del stream. */
+    fun sendInput(json: String) = sendJson(json)
 
     // --- reloj/latencia (v1.1-perf1) ---
     @Volatile private var offsetMs = 0.0
