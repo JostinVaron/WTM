@@ -140,3 +140,109 @@ URL de la app debe ser la del interfaz por el que entra la tablet:
 `https://<ip-hotspot>:8443` (tablet en el hotspot) o `https://<ip-router>:8443`
 (tablet en el WiFi de casa). Si la app muestra "failed to connect", casi siempre
 es esto.
+
+## Actualización 2026-11-25 (segunda sesión): UHID S Pen, PenProbe y rechazo de palma
+
+Versión viewer: `0.1.2-pen3` (versionCode 3), CI run `45712399294`.
+La Fase 3 ya **no** requiere parchear `scrcpy-server`: se usa el `scrcpy-server`
+5.0.1 stock y el lápiz entra por UHID (se evita el fork GPLv3).
+
+### F3 — pantalla verde eliminada con `TYPE_START_APP`
+
+- `server.py` envía `TYPE_START_APP` (16) por el canal de control de scrcpy
+  justo después de conectar, con `WTM_START_APP` (default
+  `com.android.settings`).
+- Evita la carrera de `dumpsys display` que dejaba el display virtual sin
+  capa y el viewer mostraba verde.
+- Medición: captura del display virtual (`screencap -d <sf-id>`) 2000x1200,
+  **7740 colores únicos, 0.0% píxeles verdes**. Log:
+  `[scrcpy] START_APP com.android.settings (display virtual)`.
+
+### F1 — S Pen como digitizador UHID real
+
+- `pen_handler.py` crea un dispositivo HID Usage Page `0x0D` / Usage Pen
+  `0x02`, reporte de 9 bytes: flags, X, Y, presión 0..4095, tilt X/Y −90..90.
+- VID/PID 0x1209/0x0001; nombre `WTM Pen`; `INPUT_PROP_DIRECT`.
+- Dedos siguen por `INJECT_TOUCH`; el lápiz va por `UHID_CREATE/INPUT`.
+- Medición en el S25 (Android 17):
+  - `dumpsys input`: `WTM Pen`,
+    `Sources: KEYBOARD | TOUCHSCREEN | STYLUS`,
+    `AssociatedDisplayUniqueIdByPort: virtual:...scrcpy,...`,
+    `Touch Input Mapper ... mode - DIRECT`.
+  - `getevent -pl`: `ABS_PRESSURE 0..4095`, `ABS_TILT_X/Y -90..90`,
+    `BTN_TOOL_PEN/RUBBER`, `INPUT_PROP_DIRECT`.
+  - PenProbe: `tool: STYLUS (2)`, presión 4092/4095, tilt 30°, orientación
+    −90° con el reporte sintético (tiltX=30, tiltY=0).
+
+### F1b — calibración de tilt/orientación
+
+- AOSP `TouchInputMapper.cpp`:
+  `orientation=atan2(-sin(tiltX),sin(tiltY))`,
+  `tilt=acos(cos(tiltX)*cos(tiltY))`.
+- El mapeo anterior introducía **−90°** de offset. La inversa exacta (R²,
+  ecuación cuadrática) conserva orientación y tilt; solo satura en tilt casi
+  plano diagonal, donde los dos ejes HID no alcanzan.
+- Verificación: pedido `tl=0.5 rad (28.65°)`, `or=-1.0 rad (−57.30°)`;
+  PenProbe midió `tilt=28.06°`, `orientation=−57.53°` (el error de 0.58° es
+  el redondeo a grados enteros del HID).
+
+### F2 — rechazo de palma
+
+- Viewer (`PenForwarder.kt`): descarta `TOOL_TYPE_PALM` (5), honra
+  `FLAG_CANCELED` (API 33+), ignora dedos 800 ms tras el último evento de
+  stylus y libera dedos ya abajo. Campo `tool` (`stylus`/`eraser`/`finger`).
+- Relay (`pen_handler.py`): respaldo; si un dedo se mueve con stylus activo,
+  lo suelta con un UP y no reenvía sus movimientos.
+- Verificación local: `input stylus` en la tablet llegó al relay
+  (`x=500, tool=stylus`); `input touchscreen tap` en `x=700` **no** llegó
+  (0 mensajes) por el holdoff del viewer.
+- Verificación relay: dedo en (150,150) con stylus activo fue rechazado;
+  PenProbe mostró el último evento `STYLUS MOVE` y ningún puntero de dedo.
+
+### PenProbe — app de verificación en el display virtual
+
+- Activity exportada del APK viewer:
+  ```
+  adb shell am start --display <displayId> -n ai.ashna.wtmviewer/.PenProbeActivity
+  ```
+- Obtener el display lógico:
+  ```
+  adb shell dumpsys display | grep -oE "displayId=[0-9]+, uniqueId='virtual:[^']*scrcpy[^']*'"
+  ```
+- Capturar el display virtual (usar el id de SurfaceFlinger, no el lógico):
+  ```
+  adb shell dumpsys SurfaceFlinger --display-id | grep -i scrcpy
+  adb exec-out screencap -d <sf-id> -p > vd.png
+  ```
+- Test UHID sin dibujar: enviar `{"t":"pen_test"}` por `/ws` con el token
+  viewer (no guardar el token en el repo). El relay crea/usa el dispositivo
+  y emite 180 reportes sintéticos.
+
+### CI y firma del APK
+
+- `viewer-apk.yml` compila en GitHub Actions; cada run genera un keystore
+  debug nuevo, así que la firma cambia entre runs. Para actualizar la tablet
+  sin perder token/URL:
+  ```
+  adb shell run-as ai.ashna.wtmviewer cat .../shared_prefs/wtm.xml > wtm.xml
+  adb shell pm uninstall ai.ashna.wtmviewer
+  adb install -r app-debug.apk
+  # lanzar una vez, force-stop, restaurar wtm.xml con run-as, relanzar
+  ```
+- `pm uninstall -k` **no** sirve para cambiar de firma: deja el paquete
+  registrado y el install sigue fallando con
+  `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
+
+### Variables nuevas
+
+- `WTM_START_APP` (default `com.android.settings`): app que se abre en el
+  display virtual para poblarlo (F3).
+- `WTM_PALM_REJECT` (default `1`): rechazo de palma de respaldo en el relay.
+- `WTM_PIN_PROFILE=1` sigue fijando 2000x1200@60 y 35 Mbps.
+
+### Estado verificado (2026-11-25)
+
+- Relay nuevo en `~/dex`; `healthz` OK; `scrcpy_alive:true`.
+- Stream HEVC 2000x1200; tablet v3 reconectada y mostrando PenProbe.
+- 51 tests unitarios OK (`tests.test_pen_handler`, `test_server_security`,
+  `test_server_live`).
