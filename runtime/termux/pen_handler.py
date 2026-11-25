@@ -181,8 +181,18 @@ def _tilt_xy(tilt, orientation):
 
     Android entrega tilt (0..pi/2 desde la perpendicular) y orientation
     (azimut). El HID define X/Y Tilt como el angulo de la pluma en cada
-    plano; se reconstruye el vector y se proyecta. PenProbe mide el
-    resultado para calibrar cualquier diferencia de signo del fabricante.
+    plano. Android los reconstruye con (TouchInputMapper.cpp):
+        orientation = atan2(-sin(tiltX), sin(tiltY))
+        tilt        = acos(cos(tiltX) * cos(tiltY))
+
+    La inversa exacta: con a=sin(tiltX), b=sin(tiltY) y R^2 = a^2+b^2,
+        a = -R*sin(orientacion), b = R*cos(orientacion)
+    y la condicion de tilt da  denom*R^4 - R^2 + sin^2(tilt) = 0,
+    denom = sin^2(orientacion)*cos^2(orientacion). Se toma la raiz
+    pequena (la otra no cabe en |a|,|b| <= 1). Para tilt=0 o azimuth
+    recto (denom=0) la solucion es R=sin(tilt). Si la raiz pide R>1
+    (tilt casi plano en diagonal), se satura: los dos ejes HID no
+    pueden representar ese punto y se conserva la orientacion.
     """
     try:
         t = float(tilt)
@@ -197,11 +207,23 @@ def _tilt_xy(tilt, orientation):
     t = min(t, math.pi / 2)
     if not math.isfinite(o):
         o = 0.0
-    sx = math.sin(t) * math.cos(o)
-    sy = math.sin(t) * math.sin(o)
-    cz = math.cos(t)
-    tx = int(round(math.degrees(math.atan2(sx, cz))))
-    ty = int(round(math.degrees(math.atan2(sy, cz))))
+    st = math.sin(t)
+    if st < 1e-9:
+        return 0, 0
+    sphi = math.sin(o)
+    cphi = math.cos(o)
+    denom = (sphi * cphi) ** 2
+    if denom < 1e-12:
+        r2 = st * st
+    else:
+        disc = max(0.0, 1.0 - 4.0 * denom * st * st)
+        r2 = (1.0 - math.sqrt(disc)) / (2.0 * denom)
+    r2 = min(1.0, max(0.0, r2))
+    r = math.sqrt(r2)
+    a = max(-1.0, min(1.0, -r * sphi))
+    b = max(-1.0, min(1.0, r * cphi))
+    tx = int(round(math.degrees(math.asin(a))))
+    ty = int(round(math.degrees(math.asin(b))))
     return max(-_MAX_TILT, min(_MAX_TILT, tx)), max(-_MAX_TILT, min(_MAX_TILT, ty))
 
 

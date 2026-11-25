@@ -91,15 +91,45 @@ class HidDescriptorTest(unittest.TestCase):
         self.assertEqual(report[0] & 0b100, 0b100)
 
 
+def _android_reconstruct(tx_deg, ty_deg):
+    """Misma formula que TouchInputMapper.cpp de AOSP."""
+    tx = math.radians(tx_deg)
+    ty = math.radians(ty_deg)
+    orientation = math.degrees(math.atan2(-math.sin(tx), math.sin(ty)))
+    tilt = math.degrees(math.acos(math.cos(tx) * math.cos(ty)))
+    return orientation, tilt
+
+
+def _angle_delta(a, b):
+    return abs((a - b + 180.0) % 360.0 - 180.0)
+
+
 class TiltConversionTest(unittest.TestCase):
+    def assert_roundtrip(self, tilt, orientation):
+        tx, ty = pen_handler._tilt_xy(tilt, orientation)
+        got_or, got_tilt = _android_reconstruct(tx, ty)
+        self.assertLess(_angle_delta(got_or, math.degrees(orientation)), 1.0,
+                        (tilt, orientation, tx, ty, got_or))
+        self.assertLess(abs(got_tilt - math.degrees(tilt)), 1.0,
+                        (tilt, orientation, tx, ty, got_tilt))
+
     def test_perpendicular_is_zero(self):
         self.assertEqual(pen_handler._tilt_xy(0.0, 0.0), (0, 0))
 
-    def test_positive_x(self):
-        self.assertEqual(pen_handler._tilt_xy(math.pi / 4, 0.0), (45, 0))
+    def test_orientation_zero_roundtrip(self):
+        self.assert_roundtrip(math.pi / 4, 0.0)
 
-    def test_positive_y(self):
-        self.assertEqual(pen_handler._tilt_xy(math.pi / 4, math.pi / 2), (0, 45))
+    def test_orientation_plus_90_roundtrip(self):
+        self.assert_roundtrip(math.pi / 4, math.pi / 2)
+
+    def test_orientation_minus_57_roundtrip(self):
+        self.assert_roundtrip(0.5, -1.0)
+
+    def test_orientation_minus_143_roundtrip(self):
+        self.assert_roundtrip(math.pi / 3, -2.5)
+
+    def test_orientation_45_tilt_60_roundtrip(self):
+        self.assert_roundtrip(math.pi / 3, math.pi / 4)
 
     def test_clamps(self):
         tx, ty = pen_handler._tilt_xy(math.pi, 0.0)
