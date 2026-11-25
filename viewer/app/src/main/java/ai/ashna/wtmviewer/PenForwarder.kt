@@ -24,9 +24,12 @@ import kotlin.math.roundToInt
  *    corra a 60 fps
  *  - tilt ("tl") y orientacion ("or"): hoy el touch del scrcpy no las
  *    inyecta, pero viajan en el mensaje para el backend X11 futuro
- *  - rechazo de palma: TOOL_TYPE_PALM se descarta (el digitizador ya lo
- *    marca); solo stylus y finger dibujan
+ *  - S Pen en MODO BORRADOR (TOOL_TYPE_ERASER) se reenvia como stylus
  *  - multi-touch: un pid por puntero, estable durante todo el gesto
+ *
+ * Rechazo de palma: lo hace el digitizador/framework de Samsung ANTES de
+ * entregar el evento (no existe TOOL_TYPE_PALM en el SDK). Aqui solo se
+ * reenvian stylus/eraser/finger; mouse y desconocidos se descartan.
  *
  * HUD: se alterna tocando la esquina superior derecha (la zona del
  * propio HUD — ese gesto se consume localmente, NO viaja al S25) o con
@@ -116,13 +119,17 @@ class PenForwarder(
             val sh = streamH()
             if (sw <= 0 || sh <= 0) return true
             for (i in 0 until ev.pointerCount) {
-                if (ev.getToolType(i) == MotionEvent.TOOL_TYPE_STYLUS) {
+                if (isPenTool(ev.getToolType(i))) {
                     emit(ev, i, -1, 7, sw, sh)
                 }
             }
         }
         return true
     }
+
+    /** Stylus o borrador: las dos puntas del S Pen dibujan. */
+    private fun isPenTool(tool: Int) =
+        tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER
 
     /** Boton lateral del S Pen (plumas que lo tienen): toggle del HUD. */
     private fun checkStylusButton(ev: MotionEvent) {
@@ -137,8 +144,10 @@ class PenForwarder(
      */
     private fun emit(ev: MotionEvent, i: Int, h: Int, act: Int, sw: Int, sh: Int) {
         val tool = ev.getToolType(i)
-        if (tool == MotionEvent.TOOL_TYPE_PALM) return   // rechazo de palma
-        if (tool != MotionEvent.TOOL_TYPE_STYLUS && tool != MotionEvent.TOOL_TYPE_FINGER) return
+        val pen = isPenTool(tool)
+        // Solo dibujan stylus/eraser/finger; el rechazo de palma ya lo hizo
+        // el framework de Samsung antes de entregar el evento.
+        if (!pen && tool != MotionEvent.TOOL_TYPE_FINGER) return
 
         val vw = view.width.coerceAtLeast(1)
         val vh = view.height.coerceAtLeast(1)
@@ -154,10 +163,9 @@ class PenForwarder(
         if (!p.isFinite() || p < 0f) p = if (act == 7) 1f else 0f
         if (p > 1f) p = 1f
 
-        val stylus = tool == MotionEvent.TOOL_TYPE_STYLUS
         var tl = 0f
         var or = 0f
-        if (stylus) {
+        if (pen) {
             tl = if (h >= 0) ev.getHistoricalAxisValue(MotionEvent.AXIS_TILT, i, h)
                  else ev.getAxisValue(MotionEvent.AXIS_TILT, i)
             or = if (h >= 0) ev.getHistoricalAxisValue(MotionEvent.AXIS_ORIENTATION, i, h)
@@ -172,7 +180,7 @@ class PenForwarder(
             7 -> "ph"
             else -> "pm"
         }
-        val pt = if (stylus) "stylus" else "finger"
+        val pt = if (pen) "stylus" else "finger"
         send("{\"t\":\"$t\",\"a\":$act,\"pid\":${ev.getPointerId(i)}," +
             "\"x\":$x,\"y\":$y,\"p\":${fmt(p)},\"pt\":\"$pt\"," +
             "\"tl\":${fmt(tl)},\"or\":${fmt(or)}}")
