@@ -328,7 +328,9 @@ class MainActivity : Activity() {
                         Toast.makeText(this@MainActivity, "WTM: video activo", Toast.LENGTH_SHORT).show()
                         startHudLoop()
                     } },
-                    { wsClient?.requestKey() }
+                    { wsClient?.requestKey() },
+                    lowLatency = intent.getBooleanExtra("low_latency", true),
+                    queueMax = intent.getIntExtra("queue_max", 8)
                 )
                 wsClient = WsClient(
                     baseUrl = url,
@@ -411,8 +413,9 @@ class MainActivity : Activity() {
                 val lat = ws?.latencyAvg() ?: 0.0
                 val rtt = ws?.rttMs() ?: -1.0
                 val txt = String.format(
-                    "%.0f fps  lat %.1f ms  dec %.1f ms  rtt %.0f ms | %s | render %d  rdrop %d  qdrop %d  cola %d\n%s",
+                    "%.0f fps  lat %.1f ms  dec %.1f ms  rtt %.0f ms | %s | render %d  rdrop %d  qdrop %d  cola %d  ll %d  qcap %d\n%s",
                     fps, lat, d.decodeMs, rtt, d.decoder, d.rendered, d.renderDrops, d.queueDrops, d.queueDepth,
+                    if (d.lowLatency) 1 else 0, d.queueCap,
                     capHudLine   // F4b: linea de perfil (verde=aplicado y verificado)
                 )
                 tick++

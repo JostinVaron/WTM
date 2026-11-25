@@ -19,7 +19,7 @@ import java.nio.ByteBuffer
  * SINTETICO local, que siempre avanza en orden — el atraso que buscaba
  * nunca existia por construccion. Bug de diseno, probado por datos.
  *
- * perf3 acota la cola de entrada a QUEUE_MAX (8 frames ~ 133 ms) y al
+ * perf3 acota la cola de entrada (queueCap, 8 frames ~ 133 ms por defecto) y al
  * superarla descarta el delta MAS VIEJO (los keyframes y el csd jamas
  * se descartan — sin referencia el stream se rompe). Al descartar se
  * pide keyframe fresco al server ({"t":"idr"}, el mismo recovery que
@@ -32,14 +32,18 @@ class VideoDecoder(
     private val surface: Surface,
     private val onStatus: (String) -> Unit,
     private val onFirstFrame: () -> Unit,
-    private val onNeedKey: () -> Unit
+    private val onNeedKey: () -> Unit,
+    private val lowLatency: Boolean = true,
+    queueMax: Int = 8
 ) {
+    /** Cota de frames en vuelo; 8 por defecto (~133 ms a 60 fps). */
+    private val queueCap = queueMax.coerceIn(2, 32)
+
     companion object {
         private const val SILENCE_TICKS = 3
         private val KEY_NALS = setOf(19, 20, 21)   // NO const: setOf no es constante de compilacion
         private val START_CODE = byteArrayOf(0, 0, 0, 1)
-        private const val DROP_LAG_US = 120_000L   // seguridad inerte (pts sintetico); la cota real es QUEUE_MAX
-        private const val QUEUE_MAX = 8            // ~133 ms a 60 fps: cota dura de video en vuelo
+        private const val DROP_LAG_US = 120_000L   // seguridad inerte (pts sintetico); la cota real es queueCap
         private const val KEY_REQ_PERIOD = 20L     // pedir IDR cada N descartes (anti-spam)
     }
 
@@ -50,7 +54,9 @@ class VideoDecoder(
         val queueDrops: Long,
         val queueDepth: Int,
         /** Llegada del frame al decoder -> releaseOutputBuffer(render=true). */
-        val decodeMs: Double
+        val decodeMs: Double,
+        val lowLatency: Boolean,
+        val queueCap: Int
     )
 
     private class Pending(val data: ByteArray, val pts: Long, val isCsd: Boolean, val isKey: Boolean)
@@ -90,7 +96,8 @@ class VideoDecoder(
 
     /** Snapshot para el HUD (thread-safe). */
     fun stats(): Stats = synchronized(lock) {
-        Stats(activeName, framesOut, renderDrops, queueDrops, pending.size, decodeMsAvg)
+        Stats(activeName, framesOut, renderDrops, queueDrops, pending.size,
+              decodeMsAvg, lowLatency, queueCap)
     }
 
     /** "avc1.*" -> H.264, "hvc1.*"/"hev1.*" -> HEVC; otro -> error visible. */
@@ -172,7 +179,7 @@ class VideoDecoder(
                      else MediaCodec.createByCodecName(name)
                 // Hint de baja latencia solo si el codec declara soportarlo:
                 // un codec que rechaza la key haria fallar configure().
-                if (Build.VERSION.SDK_INT >= 30) {
+                if (lowLatency && Build.VERSION.SDK_INT >= 30) {
                     try {
                         val caps = c.codecInfo.getCapabilitiesForType(lastMime)
                         if (caps.isFeatureSupported(
@@ -200,7 +207,7 @@ class VideoDecoder(
                                 arrivals.remove(info.presentationTimeUs)
                             }
                             // RENDER-DROP de seguridad (inerte con pts sintetico;
-                            // la cota real de latencia la pone QUEUE_MAX).
+                            // la cota real de latencia la pone queueCap).
                             val lag = maxSeenPts - info.presentationTimeUs
                             if (framesOut > 3 && lag > DROP_LAG_US) {
                                 m.releaseOutputBuffer(index, false)
@@ -268,7 +275,7 @@ class VideoDecoder(
      * llevan VPS/SPS/PPS in-band (estilo scrcpy) y se guardan para
      * re-inyeccion tras una rotacion de decoder.
      *
-     * Cota de latencia (perf3): si la cola supera QUEUE_MAX se descarta
+     * Cota de latencia (perf3): si la cola supera queueCap se descarta
      * el delta MAS VIEJO y se pide keyframe fresco — nunca se toca un
      * keyframe ni el csd.
      */
@@ -295,7 +302,7 @@ class VideoDecoder(
             if (arrivals.size > 128) {
                 arrivals.keys.minOrNull()?.let { arrivals.remove(it) }
             }
-            while (pending.size > QUEUE_MAX) {
+            while (pending.size > queueCap) {
                 var removed = false
                 var i = 0
                 while (i < pending.size) {
