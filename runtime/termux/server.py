@@ -1665,6 +1665,12 @@ async def ws_handler(request):
                         state.need_key.discard(ws)
                 elif data.get("t") == "hb":
                     await ws.send_str("h")      # downlink heartbeat (keeps the client's Wi-Fi radio awake)
+                elif data.get("t") == "cap":
+                    import cap_handler
+                    await cap_handler.handle(state, ws, data)
+                elif data.get("t") in ("pd", "pm", "pu", "ph"):
+                    import pen_handler
+                    await pen_handler.handle(state, data)
                 elif data.get("t") == "flash":
                     state.flash_t = time.time()
                     injector.flash(data.get("c", 0))
