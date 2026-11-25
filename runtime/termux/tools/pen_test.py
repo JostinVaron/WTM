@@ -44,7 +44,7 @@ def viewer_token():
         sys.exit(f"pen_test: no pude leer el token viewer ({exc})")
 
 
-async def run(url, token, timeout):
+async def run(url, token, timeout, flash=False):
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -58,7 +58,7 @@ async def run(url, token, timeout):
                 ws_url + "/ws", ssl=ctx,
                 headers={"Origin": url,
                          "Cookie": f"wtm_session={token}"}) as ws:
-            await ws.send_str('{"t":"pen_test"}')
+            await ws.send_str('{"t":"flash"}' if flash else '{"t":"pen_test"}')
             loop = asyncio.get_event_loop()
             end = loop.time() + timeout
             while loop.time() < end:
@@ -66,7 +66,8 @@ async def run(url, token, timeout):
                     await asyncio.wait_for(ws.receive(), timeout=1.0)
                 except asyncio.TimeoutError:
                     pass
-    print(f"pen_test: trazo sintetico enviado a {url}")
+    what = "flash de latencia" if flash else "trazo sintetico"
+    print(f"pen_test: {what} enviado a {url}")
 
 
 def main():
@@ -78,8 +79,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default=f"https://{host}:{port}")
     ap.add_argument("--timeout", type=float, default=4.0)
+    ap.add_argument("--flash", action="store_true",
+                    help="mide el camino de video (inject->capture->relay)")
     args = ap.parse_args()
-    asyncio.run(run(args.url.rstrip("/"), viewer_token(), args.timeout))
+    asyncio.run(run(args.url.rstrip("/"), viewer_token(), args.timeout,
+                    args.flash))
 
 
 if __name__ == "__main__":

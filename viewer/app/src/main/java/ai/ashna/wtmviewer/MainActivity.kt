@@ -411,8 +411,8 @@ class MainActivity : Activity() {
                 val lat = ws?.latencyAvg() ?: 0.0
                 val rtt = ws?.rttMs() ?: -1.0
                 val txt = String.format(
-                    "%.0f fps  lat %.1f ms  rtt %.0f ms | %s | render %d  rdrop %d  qdrop %d  cola %d\n%s",
-                    fps, lat, rtt, d.decoder, d.rendered, d.renderDrops, d.queueDrops, d.queueDepth,
+                    "%.0f fps  lat %.1f ms  dec %.1f ms  rtt %.0f ms | %s | render %d  rdrop %d  qdrop %d  cola %d\n%s",
+                    fps, lat, d.decodeMs, rtt, d.decoder, d.rendered, d.renderDrops, d.queueDrops, d.queueDepth,
                     capHudLine   // F4b: linea de perfil (verde=aplicado y verificado)
                 )
                 tick++

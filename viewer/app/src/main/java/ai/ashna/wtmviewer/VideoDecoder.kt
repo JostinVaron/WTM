@@ -3,6 +3,8 @@ package ai.ashna.wtmviewer
 import android.media.MediaCodec
 import android.media.MediaCodecList
 import android.media.MediaFormat
+import android.os.Build
+import android.os.SystemClock
 import android.view.Surface
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -46,7 +48,9 @@ class VideoDecoder(
         val rendered: Long,
         val renderDrops: Long,
         val queueDrops: Long,
-        val queueDepth: Int
+        val queueDepth: Int,
+        /** Llegada del frame al decoder -> releaseOutputBuffer(render=true). */
+        val decodeMs: Double
     )
 
     private class Pending(val data: ByteArray, val pts: Long, val isCsd: Boolean, val isKey: Boolean)
@@ -70,6 +74,11 @@ class VideoDecoder(
     private val freeInputs = ArrayDeque<Int>()
     private val pending = ArrayDeque<Pending>()
 
+    /** pts sintetico -> llegada al decoder (ns); mide decode->render local. */
+    private val arrivals = HashMap<Long, Long>()
+    private val recentDecode = ArrayDeque<Double>()
+    private var decodeMsAvg = 0.0
+
     private var lastMime = ""
     private var lastW = 0
     private var lastH = 0
@@ -81,7 +90,7 @@ class VideoDecoder(
 
     /** Snapshot para el HUD (thread-safe). */
     fun stats(): Stats = synchronized(lock) {
-        Stats(activeName, framesOut, renderDrops, queueDrops, pending.size)
+        Stats(activeName, framesOut, renderDrops, queueDrops, pending.size, decodeMsAvg)
     }
 
     /** "avc1.*" -> H.264, "hvc1.*"/"hev1.*" -> HEVC; otro -> error visible. */
@@ -141,6 +150,9 @@ class VideoDecoder(
             teardownLocked()
             freeInputs.clear()
             pending.clear()
+            arrivals.clear()
+            recentDecode.clear()
+            decodeMsAvg = 0.0
             framesFed = 0
             framesOut = 0
             renderDrops = 0
@@ -158,6 +170,19 @@ class VideoDecoder(
             try {
                 c = if (name == null) MediaCodec.createDecoderByType(lastMime)
                      else MediaCodec.createByCodecName(name)
+                // Hint de baja latencia solo si el codec declara soportarlo:
+                // un codec que rechaza la key haria fallar configure().
+                if (Build.VERSION.SDK_INT >= 30) {
+                    try {
+                        val caps = c.codecInfo.getCapabilitiesForType(lastMime)
+                        if (caps.isFeatureSupported(
+                                android.media.MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)) {
+                            format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                        }
+                    } catch (_: Exception) {
+                        // sin soporte declarado: se configura normal
+                    }
+                }
                 c.setCallback(object : MediaCodec.Callback() {
                     override fun onInputBufferAvailable(m: MediaCodec, index: Int) {
                         if (released) return
@@ -170,6 +195,10 @@ class VideoDecoder(
                     override fun onOutputBufferAvailable(m: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
                         if (released) return
                         try {
+                            val renderNs = SystemClock.elapsedRealtimeNanos()
+                            val arrivalNs = synchronized(lock) {
+                                arrivals.remove(info.presentationTimeUs)
+                            }
                             // RENDER-DROP de seguridad (inerte con pts sintetico;
                             // la cota real de latencia la pone QUEUE_MAX).
                             val lag = maxSeenPts - info.presentationTimeUs
@@ -181,6 +210,14 @@ class VideoDecoder(
                             if (info.presentationTimeUs > maxSeenPts) maxSeenPts = info.presentationTimeUs
                             m.releaseOutputBuffer(index, true)
                             framesOut++
+                            if (arrivalNs != null && info.presentationTimeUs > 0) {
+                                val ms = (renderNs - arrivalNs) / 1e6
+                                synchronized(lock) {
+                                    recentDecode.addLast(ms)
+                                    if (recentDecode.size > 40) recentDecode.removeFirst()
+                                    decodeMsAvg = recentDecode.average()
+                                }
+                            }
                             if (framesOut == 1L) onFirstFrame()
                         } catch (e: Exception) {
                             logRateLimited("error al renderizar frame: ${e.message}")
@@ -254,6 +291,10 @@ class VideoDecoder(
 
         synchronized(lock) {
             pending.addLast(Pending(payload, pts, false, isKey))
+            arrivals[pts] = SystemClock.elapsedRealtimeNanos()
+            if (arrivals.size > 128) {
+                arrivals.keys.minOrNull()?.let { arrivals.remove(it) }
+            }
             while (pending.size > QUEUE_MAX) {
                 var removed = false
                 var i = 0
@@ -261,6 +302,7 @@ class VideoDecoder(
                     val p = pending.elementAt(i)
                     if (!p.isCsd && !p.isKey) {
                         pending.removeAt(i)
+                        arrivals.remove(p.pts)
                         queueDrops++
                         removed = true
                         break
