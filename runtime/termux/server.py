@@ -853,10 +853,16 @@ def _route_input_once():
                           "route-input.sh")
     print(f"[route] asociando mouse BT al display virtual (sesion {_scrcpy_session})",
           flush=True)
+    # El display virtual tarda en aparecer en dumpsys: route-input devuelve 5
+    # mientras no exista. Reintentar hasta ~30 s y dejar rastro en rd-route.log.
+    route_log = os.path.join(os.environ.get("TMPDIR", "/data/data/com.termux/files/usr/tmp"),
+                             "rd-route.log")
+    cmd = (f'for i in $(seq 1 30); do bash "{script}" >>"{route_log}" 2>&1 '
+           f'&& exit 0; sleep 1; done; exit 1')
     try:
         import subprocess
-        subprocess.Popen(["bash", script], stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+        subprocess.Popen(["bash", "-c", cmd], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
     except Exception as exc:
         print(f"[route] no se pudo lanzar route-input.sh: {exc}", flush=True)
