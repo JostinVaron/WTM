@@ -37,8 +37,14 @@ los eventos no llegarian al display virtual.
 Rechazo de palma (cinturon y tirantes):
   - el viewer descarta TOOL_TYPE_PALM y FLAG_CANCELED (Android 13+);
   - aqui, con WTM_PALM_REJECT=1 (default), se descarta cualquier dedo
-    mientras haya stylus activo en el ultimo segundo. Si ese dedo ya
-    estaba abajo, se le manda un UP para no dejar un puntero pegado.
+    mientras haya stylus activo en WTM_PALM_WINDOW_MS (600 ms default).
+    Si ese dedo ya estaba abajo, se le manda un UP para no dejarlo pegado.
+
+Ciclo de vida del hover (clave para que el tactil vuelva):
+  - HOVER_EXIT del viewer (act 10) saca la pluma de rango al instante;
+  - cada hover/UP arma un respaldo de WTM_PEN_OOR_MS (1000 ms default)
+    por si ese evento se pierde. Sin esto la pluma quedaba en rango para
+    siempre y Android suprimia tactil y mouse en el display virtual.
 
 Handler casi stateless: la accion la calcula el viewer. El unico estado
 es el dispositivo UHID (se recrea por sesion scrcpy) y el timeout de
@@ -53,7 +59,8 @@ import struct
 import time
 
 # Acciones scrcpy permitidas (las que envia PenForwarder.kt).
-_ALLOWED_ACT = (0, 1, 2, 3, 7)
+# 7 = HOVER_MOVE/ENTER, 10 = HOVER_EXIT (sacada de rango inmediata).
+_ALLOWED_ACT = (0, 1, 2, 3, 7, 10)
 
 # --- protocolo de control scrcpy v5: UHID ---------------------------------
 CTRL_TYPE_UHID_CREATE = 12
@@ -97,6 +104,24 @@ def _srv_module():
 def _palm_reject():
     return os.environ.get("WTM_PALM_REJECT", "1").strip().lower() in (
         "1", "true", "yes", "on")
+
+
+def _palm_window():
+    """Ventana (s) en la que un dedo se rechaza tras tocar con el stylus."""
+    try:
+        ms = int(os.environ.get("WTM_PALM_WINDOW_MS", "600"))
+    except (TypeError, ValueError):
+        ms = 600
+    return max(0, min(5000, ms)) / 1000.0
+
+
+def _oor_delay():
+    """Respaldo de fuera-de-rango si el viewer no manda HOVER_EXIT."""
+    try:
+        ms = int(os.environ.get("WTM_PEN_OOR_MS", "1000"))
+    except (TypeError, ValueError):
+        ms = 1000
+    return max(50, min(5000, ms)) / 1000.0
 
 
 def _report_desc(w, h):
@@ -234,17 +259,36 @@ def _cancel_oor():
     _oor_task = None
 
 
-async def _out_of_range_later(srv):
-    """Saca la pluma de rango tras un UP si no llega otro evento.
+def _schedule_oor(srv):
+    """Arma el fuera-de-rango de respaldo (hover o UP).
+
+    El camino rapido es HOVER_EXIT del viewer (act 10): llega apenas el S Pen
+    sale del digitizador y saca la pluma de rango al instante. Este timer
+    cubre el caso en que ese evento se pierda. En tests sincronicos no hay
+    loop: se omite sin romper.
+    """
+    global _oor_task
+    _cancel_oor()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _oor_task = loop.create_task(
+        _out_of_range_later(srv, _uhid_session, _oor_delay()))
+
+
+async def _out_of_range_later(srv, session, delay):
+    """Saca la pluma de rango si no llega otro evento.
 
     Sin esto, el hover del telefono se queda congelado en la ultima posicion
-    cuando el S Pen se aleja de la tablet (la tablet deja de mandar ph).
+    cuando el S Pen se aleja de la tablet (la tablet deja de mandar ph), y
+    Android suprime tactil y mouse mientras la pluma esta en rango.
     """
     try:
-        await asyncio.sleep(1.2)
+        await asyncio.sleep(delay)
     except asyncio.CancelledError:
         return
-    if not _uhid_ready:
+    if not _uhid_ready or _uhid_session != session:
         return
     x, y, tx, ty, eraser = _uhid_last
     _send_report(srv, _report(x, y, 0, tx, ty, False, False, eraser))
@@ -259,7 +303,7 @@ def _release_finger(srv, pid, x, y, w, h):
 
 
 def _handle(state, data):
-    global _stylus_active_until, _uhid_last, _oor_task
+    global _stylus_active_until, _uhid_last
     srv = _srv_module()
     act = int(data.get("a", -1))
     if act not in _ALLOWED_ACT:
@@ -276,13 +320,28 @@ def _handle(state, data):
     is_pen = tool in ("stylus", "eraser")
 
     if is_pen:
-        _cancel_oor()
-        # Solo el contacto (down/move/up) bloquea dedos; el hover de la
-        # pluma cerca del panel no debe impedir gestos con los dedos.
-        if act in (0, 1, 2, 3):
-            _stylus_active_until = time.monotonic() + 1.0
+        # HOVER_EXIT (act 10): el S Pen salio del digitizador. Sacarlo de
+        # rango YA: mientras siga en rango, Android suprime tactil y mouse
+        # en el display virtual (igual que una Galaxy Tab real con EMR).
+        if act == 10:
+            _cancel_oor()
+            if _uhid_ready and _uhid_session == getattr(
+                    srv, "_scrcpy_session", -1):
+                x0, y0, tx0, ty0, er0 = _uhid_last
+                _send_report(srv, _report(x0, y0, 0, tx0, ty0,
+                                          False, False, er0))
+            return
         if not _ensure(srv, state):
             return
+        # Down/move tocan: no sacar de rango. Tras UP/CANCEL o hover, armar
+        # el respaldo: si el viewer no manda HOVER_EXIT, el tactil vuelve.
+        if act in (0, 2):
+            _cancel_oor()
+        elif act in (1, 3, 7):
+            _schedule_oor(srv)
+        # Solo el contacto (down/move/up) bloquea dedos; el hover no.
+        if act in (0, 1, 2, 3):
+            _stylus_active_until = time.monotonic() + _palm_window()
         p = float(data.get("p", 1.0))
         if not math.isfinite(p) or p < 0.0:
             p = 0.0
@@ -293,8 +352,6 @@ def _handle(state, data):
         eraser = tool == "eraser"
         _send_report(srv, _report(x, y, pressure, tx, ty, tip, True, eraser))
         _uhid_last = (x, y, tx, ty, eraser)
-        if act in (1, 3):              # up/cancel: fuera de rango diferido
-            _oor_task = asyncio.create_task(_out_of_range_later(srv))
         return
 
     # --- dedo ------------------------------------------------------------

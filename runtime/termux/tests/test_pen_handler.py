@@ -5,6 +5,7 @@ These tests do not need a phone: they verify the wire formats against the
 scrcpy v5 control protocol and the HID report descriptor semantics that the
 Linux hid-input driver maps to BTN_TOOL_PEN / ABS_PRESSURE / ABS_TILT_X/Y.
 """
+import asyncio
 import math
 import struct
 import sys
@@ -254,6 +255,63 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(msg[0], server.CTRL_TYPE_INJECT_TOUCH)
         self.assertEqual(msg[1], 1)                 # ACTION_UP
         self.assertNotIn(2, pen_handler._finger_pids)
+
+
+class OutOfRangeAsyncTest(unittest.IsolatedAsyncioTestCase):
+    """Ciclo de vida del hover: nunca dejar la pluma en rango para siempre.
+
+    Regresion medida en campo 2026-11-25: tras usar el S Pen, tactil y mouse
+    quedaban muertos porque la pluma UHID seguia "in range" indefinidamente.
+    """
+
+    async def asyncSetUp(self):
+        self.srv = FakeServer()
+        self.state = FakeState()
+        pen_handler._uhid_ready = False
+        pen_handler._uhid_session = -1
+        pen_handler._stylus_active_until = 0.0
+        pen_handler._finger_pids = set()
+        pen_handler._cancel_oor()
+        self.patch = mock.patch.object(pen_handler, "_srv_module",
+                                       lambda: self.srv)
+        self.patch.start()
+
+    async def asyncTearDown(self):
+        self.patch.stop()
+        pen_handler._cancel_oor()
+
+    @staticmethod
+    def hover(**extra):
+        data = {"a": 7, "pid": 0, "x": 100, "y": 200,
+                "p": 0.0, "pt": "stylus"}
+        data.update(extra)
+        return data
+
+    def test_hover_exit_sends_out_of_range_immediately(self):
+        pen_handler._handle(self.state, self.hover())
+        before = len(self.srv.scrcpy_control.sent)
+        pen_handler._handle(self.state, self.hover(a=10))
+        self.assertEqual(len(self.srv.scrcpy_control.sent), before + 1)
+        report = self.srv.scrcpy_control.sent[-1][5:]
+        self.assertEqual(report[0] & 0b11, 0)     # sin tip ni in_range
+
+    async def test_hover_timer_is_a_real_fallback(self):
+        with mock.patch.object(pen_handler, "_oor_delay", lambda: 0.05):
+            pen_handler._handle(self.state, self.hover())
+            self.assertIsNotNone(pen_handler._oor_task)
+            await asyncio.sleep(0.12)
+        report = self.srv.scrcpy_control.sent[-1][5:]
+        self.assertEqual(report[0] & 0b11, 0)     # fuera de rango
+
+    async def test_touch_cancels_the_hover_timer(self):
+        with mock.patch.object(pen_handler, "_oor_delay", lambda: 0.5):
+            pen_handler._handle(self.state, self.hover())
+            task = pen_handler._oor_task
+            pen_handler._handle(self.state, {"a": 0, "pid": 0, "x": 10,
+                                             "y": 20, "p": 0.5,
+                                             "pt": "stylus"})
+            await asyncio.sleep(0)
+            self.assertTrue(task.cancelled())
 
 
 if __name__ == "__main__":

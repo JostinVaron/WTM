@@ -18,6 +18,7 @@ import kotlin.math.roundToInt
  *   UP / POINTER_UP     -> pu  a=1
  *   CANCEL              -> pu  a=3
  *   HOVER_MOVE (stylus levantado, via onGenericMotion) -> ph a=7
+ *   HOVER_EXIT (stylus sale del digitizador)           -> ph a=10
  *
  * Fidelidad del S Pen que preserva:
  *  - presion real (4096 niveles): viaja como "p" 0.0..1.0 SIN cuantizar
@@ -144,18 +145,30 @@ class PenForwarder(
         return true
     }
 
-    /** Hover del stylus (pluma levantada cerca del panel): generic motion. */
+    /** Hover del stylus: generic motion (enter/move/exit). */
     fun onGeneric(ev: MotionEvent): Boolean {
         checkStylusButton(ev)
         val masked = ev.actionMasked
-        if (masked == MotionEvent.ACTION_HOVER_MOVE ||
-            masked == MotionEvent.ACTION_HOVER_ENTER) {
-            val sw = streamW()
-            val sh = streamH()
-            if (sw <= 0 || sh <= 0) return true
-            for (i in 0 until ev.pointerCount) {
-                if (isPenTool(ev.getToolType(i))) {
-                    emit(ev, i, -1, 7, sw, sh)
+        val sw = streamW()
+        val sh = streamH()
+        if (sw <= 0 || sh <= 0) return true
+        when (masked) {
+            MotionEvent.ACTION_HOVER_MOVE,
+            MotionEvent.ACTION_HOVER_ENTER -> {
+                for (i in 0 until ev.pointerCount) {
+                    if (isPenTool(ev.getToolType(i))) {
+                        emit(ev, i, -1, 7, sw, sh)
+                    }
+                }
+            }
+            MotionEvent.ACTION_HOVER_EXIT -> {
+                // a=10 -> el relay saca la pluma de rango al instante.
+                // Mientras este en rango, Android suprime tactil y mouse
+                // en el display virtual (igual que una Galaxy Tab real).
+                for (i in 0 until ev.pointerCount) {
+                    if (isPenTool(ev.getToolType(i))) {
+                        emit(ev, i, -1, 10, sw, sh)
+                    }
                 }
             }
         }
@@ -234,7 +247,7 @@ class PenForwarder(
 
         var p = if (h >= 0) ev.getHistoricalPressure(i, h) else ev.getPressure(i)
         if (act == 1 || act == 3) p = 0f          // up/cancel
-        if (act == 7) p = 0f                       // hover: sin contacto
+        if (act == 7 || act == 10) p = 0f          // hover/exit: sin contacto
         if (!p.isFinite() || p < 0f) p = 0f
         if (p > 1f) p = 1f
 
@@ -252,7 +265,7 @@ class PenForwarder(
         val t = when (act) {
             0 -> "pd"
             1, 3 -> "pu"
-            7 -> "ph"
+            7, 10 -> "ph"
             else -> "pm"
         }
         val pt = if (pen) "stylus" else "finger"
