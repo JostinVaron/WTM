@@ -47,6 +47,25 @@ inyectado en la tablet con `input stylus swipe 300 300 1700 900 3000`
 - El `dec` en reposo (19 ms) incluye el último frame renderizado; es menos
   representativo que el valor en movimiento.
 
+### A/B de low-latency y cola (v7, 2026-11-25)
+
+Mismo trazo de 3 s, una pasada por variante (`--ez low_latency false`,
+`--ei queue_max 3`):
+
+| Variante | ll | qcap | fps | lat | dec | qdrop | cola |
+|---|---|---|---|---|---|---|---|
+| default | 1 | 8 | 60 | 4.9 ms | 12.5 ms | 0 | 0 |
+| sin hint | 0 | 8 | 60 | 3.9 ms | 13.8 ms | 0 | 0 |
+| cola 3 | 1 | 3 | 60 | 2.9 ms | 13.1 ms | 0 | 0 |
+
+- El hint low-latency ahorra ~1.3 ms en `dec` en esta pasada; está cerca del
+  ruido de una sola corrida, pero se mantiene porque no cuesta nada y el
+  codec declara el feature.
+- `qcap=3` no cambió la latencia en estado estable (cola 0) ni provocó
+  drops; se mantiene el default 8 por margen ante ráfagas.
+- Las diferencias de `lat` (2.9–4.9 ms) son ruido de red; no se usan para
+  decidir.
+
 ## 3. Qué se aplicó ya
 
 - `SurfaceView` + `releaseOutputBuffer(index, true)` (cero copias).
@@ -57,16 +76,17 @@ inyectado en la tablet con `input stylus swipe 300 300 1700 900 3000`
 - Métrica `dec` por frame (media de los últimos 40) y `lat` corregida por
   `sync`.
 - Decoder con cola acotada y descarte del delta más viejo + petición de IDR.
+- Extras de debug para A/B: `--ez low_latency false` y `--ei queue_max N`;
+  el HUD muestra `ll` y `qcap` para identificar la variante.
 
 ## 4. Backlog priorizado (medir antes de cambiar)
 
-1. **A/B de `KEY_LOW_LATENCY`**: el hint se aplicó en el mismo build que la
-   métrica `dec`, así que no hay un "antes" comparable. Construir una variante
-   sin el hint y comparar `dec` en el mismo trazo. Si no hay diferencia,
-   retirarlo para reducir superficie.
-2. **`QUEUE_MAX` 8 → 4**: con `cola=0` y 0 drops en el hotspot actual, bajar
-   la cota solo cambia el peor caso (ráfagas). Medir `qdrop`/`cola` con el
-   trazo y con una escena de alto movimiento; aceptar solo si no degrada.
+1. **A/B de `KEY_LOW_LATENCY`**: primera pasada hecha (arriba). Repetir 3–5
+   corridas por variante para separar el ~1.3 ms del ruido; si se confirma,
+   mantenerlo. Si no, retirarlo para reducir superficie.
+2. **`QUEUE_MAX` 8 → 4**: `qcap=3` ya se probó en estado estable sin efecto
+   (cola 0, 0 drops). Falta forzar una ráfaga real (red congestionada o
+   cambio de escena) y comparar `qdrop`/`cola`; solo entonces decidir.
 3. **Encoder**: comprobar si el encoder HEVC del S25 usa B-frames/reorder y
    si scrcpy permite `video_codec_options` (p. ej. `bitrate-mode`). Medir
    `lat` y su varianza, no solo la media. `IFRAME_INTERVAL=2` ya es
