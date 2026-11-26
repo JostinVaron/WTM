@@ -120,6 +120,8 @@ wtmpen enable|disable
 - **Build aarch64**: el nightly oficial solo publica `linux-x86_64`; el S25
   es aarch64. Se compila local con rustup **1.100** (apt trae 1.93 < MSRV
   1.95) + deps X11/Vulkan/GTK y `cargo build -p lightcraft`.
+  `cargo check -p lightcraft` **OK** (4m43s, aarch64); `Cargo.lock`
+  actualizado y subido a la rama; `cargo build -p lightcraft` en curso.
 - **Tilt/rotación**: la muestra los trae y Ubuntu los entrega, pero
   `LiveParams` no tiene ángulo (los dabs son circulares): el pincel actual
   solo usa presión. Para inclinación/rotación hay que modificar el brush
