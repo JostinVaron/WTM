@@ -108,6 +108,23 @@ wtmpen enable|disable
   `storytold/artcraft`. El camino es fork + PR + build en su CI; compilar
   la suite en el teléfono no es viable.
 
+### POC de presión en LightCraft (2026-11-26)
+
+- PR **storytold/lightcraft#4751**, rama `pen-x11-bridge` en
+  `JostinVaron/lightcraft`. CI del fork: run `45756780451` (x86_64).
+- `apps/lightcraft/src/pen_bridge.rs`: `rust-motion-tablet` 1.1 abre una
+  segunda conexión X11 pura (XI2 raw, funciona durante drags) y entrega
+  `Sample { pressure, tilt_x, tilt_y, rotation, eraser }`; en
+  `raw_input_hook` se inyecta `egui::Event::Touch { force }`, que la app ya
+  consume (`pen_force`/`brush_live`).
+- **Build aarch64**: el nightly oficial solo publica `linux-x86_64`; el S25
+  es aarch64. Se compila local con rustup **1.100** (apt trae 1.93 < MSRV
+  1.95) + deps X11/Vulkan/GTK y `cargo build -p lightcraft`.
+- **Tilt/rotación**: la muestra los trae y Ubuntu los entrega, pero
+  `LiveParams` no tiene ángulo (los dabs son circulares): el pincel actual
+  solo usa presión. Para inclinación/rotación hay que modificar el brush
+  engine (radio/flow por tilt y rotación de textura), un segundo cambio.
+
 ## Pendiente medido
 
 - Verificación con S Pen real en Krita (tu prueba).
