@@ -120,8 +120,20 @@ wtmpen enable|disable
 - **Build aarch64**: el nightly oficial solo publica `linux-x86_64`; el S25
   es aarch64. Se compila local con rustup **1.100** (apt trae 1.93 < MSRV
   1.95) + deps X11/Vulkan/GTK y `cargo build -p lightcraft`.
-  `cargo check -p lightcraft` **OK** (4m43s, aarch64); `Cargo.lock`
-  actualizado y subido a la rama; `cargo build -p lightcraft` en curso.
+  `cargo check` **OK** (4m43s) y `cargo build` **OK** (2m33s): el binario
+  corre en la tablet con **Adreno 830v1 (Vulkan)**, biblioteca Camera/616
+  fotos y panel de revelado. El log del puente: `XInput2 tablet bridge
+  started`.
+- **Pre-creación UHID corregida** (WTM `9be209d`): `_precreate_pen` llamaba
+  `_ensure(state)` pero la firma es `_ensure(srv, state)`; el UHID no se
+  creaba al arrancar y el primer trazo podía perderse. Ahora usa
+  `_srv_module()`. El primer toque del S Pen también crea `Lorie pen`.
+- **Entrega compartida**: el PR `storytold/egui#61` (egui-winit + XInput2)
+  se cerró: `rust-motion-tablet` 1.1 fija `objc2 =0.6.4` y el `eframe` del
+  fork main exige `^0.6.5`. Las apps fijan el fork en `6d518fc` (donde
+  `^0.6.4` es válido), así que la entrega que funciona es el **módulo
+  app-level** (`pen_bridge` + 3 líneas) o un crate `craft-pen` con la
+  misma rev; no requiere tocar el motor de pincel.
 - **Tilt/rotación**: la muestra los trae y Ubuntu los entrega, pero
   `LiveParams` no tiene ángulo (los dabs son circulares): el pincel actual
   solo usa presión. Para inclinación/rotación hay que modificar el brush
