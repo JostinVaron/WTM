@@ -2,6 +2,8 @@
 # Aplica el puente S Pen a una Craft app, compila aarch64 y la instala.
 # Uso: wtm-pen-app.sh <photocraft|vectorcraft|filmcraft|effectcraft|lightcraft>
 # El binario original queda como /usr/bin/<app>.pre-pen (restaurable).
+# Builds con -j3 por defecto (WTM_CARGO_JOBS): -j8 dispara el OOM killer y
+# tumba el relay/desktop del S25 mientras compilas (medido 2026-11-26).
 set -euo pipefail
 APP="${1:?uso: wtm-pen-app.sh <app>}"
 BASE="${WTM_APPS_SRC:-$HOME/artcraft-src}"
@@ -54,7 +56,7 @@ proot-distro login ubuntu-gnome --shared-tmp -- bash -c "
 set -euo pipefail
 cd '$SRC'
 export PATH=/root/.cargo/bin:\$PATH
-cargo build -p '$APP'
+cargo build -j ${WTM_CARGO_JOBS:-3} -p '$APP'
 BIN=\"target/debug/$APP\"
 [ -x \"\$BIN\" ]
 if [ ! -e '/usr/bin/$APP.pre-pen' ]; then cp -p '/usr/bin/$APP' '/usr/bin/$APP.pre-pen'; fi

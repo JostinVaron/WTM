@@ -20,8 +20,12 @@ inproot(){ proot-distro login ubuntu-gnome --shared-tmp -- bash -c "$1" 2>/dev/n
 
 log "=== Ubuntu start ==="
 
-# 1. Preferencias fijas: 2000x1200 exacto y touch directo (multi-touch real).
-termux-x11-preference displayScale:100 touchMode:3 >/dev/null 2>&1 || true
+# 1. Preferencias fijas: 2000x1200 exacto y touch como TRACKPAD (cursor).
+#    Direct touch (3) congela GNOME al alternar dedo/lapiz (medido: el shell
+#    se cuelga con touch directo XI2 + pen en la misma ventana) y "Direct touch
+#    is a bit unstable" upstream. Trackpad: el dedo mueve el cursor; el lapiz
+#    sigue siendo puntero directo con presion; el mouse sigue siendo mouse.
+termux-x11-preference displayScale:100 touchMode:1 >/dev/null 2>&1 || true
 
 # 2. Relay WTM (si esta caido, el wizard DeX lo levanta en modo no interactivo).
 if ! curl -sk --max-time 3 "https://127.0.0.1:8443/healthz" 2>/dev/null | grep -q '"ok": *true'; then
@@ -92,12 +96,10 @@ if [ "$OK" = 1 ]; then
       bash -c 'cat > /usr/local/bin/wtmpen && chmod 755 /usr/local/bin/wtmpen' \
       < "$HOME/.config/wtm/bin/wtmpen" 2>/dev/null || true
   fi
-  # Guard de palma app-agnostico (deshabilita Lorie touch mientras hay lapiz).
-  if ! pgrep -f 'wtmpen guard' >/dev/null; then
-    log "arrancando wtmpen guard"
-    nohup proot-distro login ubuntu-gnome --shared-tmp -- \
-      bash -c 'DISPLAY=:0 exec wtmpen guard' >>"$RT/wtmpen.log" 2>&1 &
-  fi
+  # Guard de palma RETIRADO: alternar enable/disable de Lorie touch con la
+  # sesion viva bugea gnome-shell (medido). La palma se bloquea 3 capas antes
+  # (Android suprime touch con stylus, viewer v8 penInRange, relay hover) y el
+  # dedo ya no toca directo: es trackpad. wtmpen queda para pruebas manuales.
   # Watchdog: relanza la activity si LMKD la mata y protege app/server.
   if ! pgrep -f 'ubuntu-watchdog.sh' >/dev/null; then
     log "arrancando ubuntu-watchdog"

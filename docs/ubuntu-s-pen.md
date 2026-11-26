@@ -55,7 +55,7 @@ wtmpen enable|disable
 
 ## Arranque e integración
 
-- Widget `~/.shortcuts/Ubuntu`: prefs (`displayScale=100`, `touchMode=3`),
+- Widget `~/.shortcuts/Ubuntu`: prefs (`displayScale=100`, `touchMode=1`),
   relay si falta, display virtual, `termux-x11 :0`, activity en el display,
   sesión GNOME con verificación de estabilidad (mismo gnome-shell 4 s),
   `wtmpen guard` y `ubuntu-watchdog`.
@@ -147,3 +147,21 @@ wtmpen enable|disable
   curvado que viste en Krita era el patrón **seno** de `pen_test`, no el
   pipeline).
 - Latencia input→tinta dentro de Ubuntu y ground truth con cámara.
+
+## Estabilidad (2026-11-26, después de la medición)
+
+- `touchMode` **3 -> 1 (Trackpad)**: Direct touch congelaba GNOME al alternar
+  dedo y lapiz en la misma ventana (varios reinicios de sesion del usuario) y
+  upstream lo describe como inestable. El dedo ahora mueve el cursor; el
+  lapiz sigue siendo puntero directo con presion; el mouse sigue siendo
+  mouse. La palma se bloquea en las 3 capas previas (Android, viewer v8,
+  relay).
+- **Guard retirado**: alternar enable/disable de `Lorie touch` con la sesion
+  viva bugea gnome-shell. `wtmpen` queda como CLI de diagnostico
+  (`status/test`), no como demon.
+- **Mouse auto-reparable**: la asociacion es per-display; dex.sh la re-aplica
+  en cada arranque y ahora tambien cuando su chequeo estricto falla con el
+  bridge vivo; el watchdog nativo verifica cada 60 s que el mouse siga
+  asociado al display scrcpy actual (`rd-route.display`) y re-asocia solo.
+- **OOM**: compilar con -j8 mato el relay con la sesion arriba. Los
+  aplicadores usan `-j3` (`WTM_CARGO_JOBS` para cambiarlo).
