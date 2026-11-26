@@ -19,14 +19,45 @@ que usan lápiz y que la operación no dependa de nadie más.
   ^0.6.5). Las apps fijan el fork en `6d518fc`, donde `^0.6.4` es válido;
   por eso la entrega app-level es la que funciona hoy.
 
-## Apps instaladas con lápiz
+## Apps de diseño: camino real
 
-| App | Estado | Backup |
+| App | Cómo recibe el lápiz | Estado |
 |---|---|---|
-| LightCraft | `/usr/bin/lightcraft` compilado aarch64 (Adreno Vulkan) | `/usr/bin/lightcraft.pre-pen` |
-| PhotoCraft | `wtm-pen-app.sh photocraft` (compila/instala) | `/usr/bin/photocraft.pre-pen` |
-| VectorCraft | `wtm-pen-app.sh vectorcraft` | `/usr/bin/vectorcraft.pre-pen` |
-| FilmCraft / EffectCraft | opcional (vídeo; sin brush de lápiz) | `.pre-pen` |
+| PhotoCraft | crate compartida `ui-shell` de `craft-libs` | `wtm-pen-shared.sh photocraft` |
+| VectorCraft | ídem (mismo rev de `craft-libs`) | `wtm-pen-shared.sh vectorcraft` |
+| FilmCraft / EffectCraft | ídem (mismo driver) | `wtm-pen-shared.sh <app>` |
+| LightCraft | `eframe::App` propio en el repo de la app | instalado; `wtm-pen-app.sh lightcraft` |
+| Blender 5.0.1 | XInput2 nativo (`GHOST`) | sin parche; el UHID debe existir antes de abrirlo |
+| Krita | XInput2 nativo | ya funciona |
+| Figma | web (Pointer Events del navegador) | depende del navegador; sin Chromium en la imagen |
+
+Blender y Krita no pasan por winit/egui: leen el tableta XInput2 directo. El
+guion de palma (`wtmpen guard`) sigue siendo el mismo para todas.
+
+## Parche único para la suite Craft (`craft-libs`)
+
+PhotoCraft/VectorCraft no tienen su `eframe::App` en su repo: usan la crate
+`craft-ui-shell` de `storytold/craft-libs` (rev `5c30761…`), cuyo
+`impl<A: ShellApp> eframe::App for Driver<A>` tiene el `raw_input_hook` común.
+Ahí vive el puente, una sola vez para PhotoCraft, VectorCraft, FilmCraft y
+EffectCraft:
+
+```sh
+~/.config/wtm/bin/wtm-pen-shared.sh photocraft
+# 1) baja craft-libs en el rev que fija la app
+# 2) aplica crates/ui-shell/src/pen_bridge.rs + raw_input_hook + dep Linux
+# 3) añade [patch."https://github.com/storytold/craft-libs"] al Cargo.toml
+#    de la app apuntando a las crates locales de craft-libs
+# 4) cargo build -p <app> e instala en /usr/bin/<app> con backup .pre-pen
+```
+
+Piezas: `wtm-pen-shared.sh`, `wtm-pen-shared-patch.py`,
+`pen_bridge_ui_shell.rs`. El parche es idempotente y se reaplica tras cada
+`git reset` de craft-libs. Para volver a la app sin lápiz:
+`cp -p /usr/bin/<app>.pre-pen /usr/bin/<app>`.
+
+El aplicador app-level (`wtm-pen-app.sh`) sigue sirviendo para apps con
+`eframe::App` propio (LightCraft y futuras apps fuera del driver).
 
 ## Aplicar a cualquier app
 
