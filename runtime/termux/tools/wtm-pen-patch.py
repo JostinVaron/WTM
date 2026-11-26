@@ -83,16 +83,23 @@ s = entry.read_text()
 if "mod pen_bridge;" not in s:
     lines = s.splitlines(keepends=True)
     i = 0
-    while i < len(lines):
-        ln = lines[i]
-        if ln.startswith("//!"):
+    n = len(lines)
+    while i < n:
+        st = lines[i].strip()
+        if st == "" or st.startswith("//") or st.startswith("/*") or st.startswith("*") or st.startswith("*/"):
             i += 1
-        elif ln.startswith("#!["):
-            while i < len(lines) and "]" not in lines[i]:
+        elif st.startswith("#!["):
+            while i < n and "]" not in lines[i]:
                 i += 1
             i += 1
         else:
             break
+    # `#[macro_use] mod i18n;` debe seguir primero: el modulo va despues.
+    if i < n and lines[i].strip().startswith("#[macro_use]"):
+        i += 1
+        while i < n and ";" not in lines[i]:
+            i += 1
+        i += 1
     s = "".join(lines[:i]) + "mod pen_bridge;\n\n" + "".join(lines[i:])
     entry.write_text(s)
     print(f"mod pen_bridge en {entry}")
