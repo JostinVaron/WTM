@@ -216,7 +216,22 @@ def request_hostname(request):
 
 def origin_is_same_site(request):
     origin = request.headers.get("Origin", "")
-    return origin == f"https://{request.host}"
+    if origin == f"https://{request.host}":
+        return True
+    # Compatibilidad con el viewer nativo v1.3-pen instalado: su login manda
+    # Origin SIN puerto ("https://<ip>") aunque el relay escuche en
+    # :8443, y el navegador/web manda el puerto. Se tolera el puerto implicito
+    # omitido solo para el MISMO esquema+host (no cambia el origen de confianza;
+    # ver docs/threat-model.md). Bug medido en campo 2026-11-25.
+    try:
+        host = request.host or ""
+        hostname = request_hostname(request)
+        port = urlsplit("//" + host).port
+    except ValueError:
+        return False
+    if port and port != 443 and hostname and origin == f"https://{hostname}":
+        return True
+    return False
 
 
 def is_local_peer(request):
@@ -808,9 +823,97 @@ async def _hevc_maybe_config(state):
     state.config = cfg
     state.last_key_frame = None  # el keyframe cacheado era de la config anterior
     state.need_key.update(state.clients)
+    _route_input_once()
     if changed:
         print(f"[hevc] config {W2}x{H2} {codec}", flush=True)
         await broadcast_text(state, json.dumps({"type": "config", **cfg}))
+
+
+_scrcpy_relaunch_at = 0.0
+_scrcpy_session = 0
+_routed_session = -1
+
+
+def _route_input_once():
+    """Re-asocia los mouses Bluetooth fisicos al display virtual de scrcpy.
+
+    La asociacion es per-display (docs/bluetooth-mouse-routing.md): muere cada
+    vez que scrcpy se relanza (cap, watchdog, recuperacion) y el cursor deja
+    de aparecer en el stream. Antes lo hacia dex.sh al final del arranque; el
+    relay relanza scrcpy por su cuenta, asi que debe re-aplicarlo el mismo.
+    Idempotente por sesion de scrcpy.
+    """
+    global _routed_session
+    if os.environ.get("MOUSE_ROUTE", "1") != "1":
+        return
+    if _routed_session == _scrcpy_session:
+        return
+    _routed_session = _scrcpy_session
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "route-input.sh")
+    print(f"[route] asociando mouse BT al display virtual (sesion {_scrcpy_session})",
+          flush=True)
+    # El display virtual tarda en aparecer en dumpsys: route-input devuelve 5
+    # mientras no exista. Reintentar hasta ~30 s y dejar rastro en rd-route.log.
+    route_log = os.path.join(os.environ.get("TMPDIR", "/data/data/com.termux/files/usr/tmp"),
+                             "rd-route.log")
+    cmd = (f'for i in $(seq 1 30); do bash "{script}" >>"{route_log}" 2>&1 '
+           f'&& exit 0; sleep 1; done; exit 1')
+    try:
+        import subprocess
+        subprocess.Popen(["bash", "-c", cmd], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except Exception as exc:
+        print(f"[route] no se pudo lanzar route-input.sh: {exc}", flush=True)
+
+
+
+def _relaunch_scrcpy():
+    """Rearranca el scrcpy del TELEFONO si la sesion murio al nacer.
+
+    Campo 2026-11-25: el relay puede conectar mientras scrcpy aun crea el
+    display virtual; con cleanup=true esa conexion temprana mata la sesion y
+    el `adb forward tcp:1234` queda apuntando a un socket muerto (bucle de
+    "connection lost" sin video). Reintentar el connect no sirve; relanzar
+    scrcpy-phone.sh si (el forward se rehace solo).
+    """
+    global _scrcpy_relaunch_at
+    now = time.monotonic()
+    if now - _scrcpy_relaunch_at < 15:
+        return
+    _scrcpy_relaunch_at = now
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "scrcpy-phone.sh")
+    print("[scrcpy] sesion muerta al arrancar: relanzando scrcpy-phone.sh", flush=True)
+    try:
+        import subprocess
+        subprocess.Popen(["bash", script], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                         start_new_session=True)
+    except Exception as exc:
+        print(f"[scrcpy] no se pudo relanzar: {exc}", flush=True)
+
+
+async def _precreate_pen(state):
+    """Crea el UHID de la pluma apenas hay tamano de video.
+
+    Termux:X11 solo expone Lorie pen/eraser si detecta un stylus al arrancar
+    la activity. Sin esto, tras recrear el display (reinicio del relay) el
+    primer trazo puede perderse y el lapiz tarda en aparecer. Es idempotente.
+    """
+    import pen_handler
+    for _ in range(40):
+        w = int(getattr(state, "scrcpy_w", 0))
+        h = int(getattr(state, "scrcpy_h", 0))
+        if w > 0 and h > 0 and scrcpy_control.writer is not None:
+            try:
+                pen_handler._ensure(pen_handler._srv_module(), state)
+                print("[pen] UHID precreado para el display virtual", flush=True)
+            except Exception as exc:
+                print(f"[pen] precreate: {exc}", flush=True)
+            return
+        await asyncio.sleep(0.25)
 
 
 async def scrcpy_reader(state):
@@ -827,7 +930,10 @@ async def scrcpy_reader(state):
             print(f"[scrcpy] connect {SCRCPY_HOST}:{SCRCPY_PORT} failed: {e}; retrying in 1s", flush=True)
             await asyncio.sleep(1)
             continue
+        global _scrcpy_session
+        _scrcpy_session += 1
         print(f"[scrcpy] connected to {SCRCPY_HOST}:{SCRCPY_PORT}", flush=True)
+        session_start = time.monotonic()
         state.need_key.update(state.clients)
         state.scrcpy_connected = True
         # tunnel_forward=true: the server accepts video first, then control, and only
@@ -835,7 +941,18 @@ async def scrcpy_reader(state):
         # connection (small delay so adb queues the video LocalSocket first) so the
         # server can proceed past its accept() for the control channel.
         await asyncio.sleep(0.3)
-        await scrcpy_control.connect()
+        control_ok = await scrcpy_control.connect()
+        if control_ok:
+            # F3 (pantalla verde): el servidor scrcpy conoce el id del display
+            # virtual internamente, asi que START_APP lo puebla sin la carrera
+            # de `dumpsys display` que tenia el shell. WTM_START_APP permite
+            # cambiar el contenido inicial sin tocar codigo.
+            start_app = os.environ.get("WTM_START_APP", "com.android.settings").strip()
+            if start_app:
+                scrcpy_control.send(ctrl_start_app(start_app))
+                print(f"[scrcpy] START_APP {start_app} (display virtual)", flush=True)
+            # Pre-crear el UHID para que la activity vea el stylus al arrancar.
+            asyncio.create_task(_precreate_pen(state))
         try:
             while True:
                 chunk = await reader.read(262144)
@@ -902,6 +1019,7 @@ async def scrcpy_reader(state):
                             state.config = cfg
                             state.last_key_frame = None  # el keyframe cacheado ya no vale (SPS nuevo)
                             state.need_key.update(state.clients)
+                            _route_input_once()
                             if changed:
                                 print(f"[scrcpy] encoder reset: nueva config {W2}x{H2} {codec}", flush=True)
                                 await broadcast_text(state, json.dumps({"type": "config", **cfg}))
@@ -933,6 +1051,8 @@ async def scrcpy_reader(state):
             scrcpy_control.close()
             state.scrcpy_connected = False
         print("[scrcpy] connection lost; reconnecting in 1s", flush=True)
+        if time.monotonic() - session_start < 3:
+            _relaunch_scrcpy()
         await asyncio.sleep(1)
 
 
@@ -980,6 +1100,7 @@ CTRL_TYPE_INJECT_KEYCODE = 0
 CTRL_TYPE_INJECT_TEXT = 1
 CTRL_TYPE_INJECT_TOUCH = 2
 CTRL_TYPE_INJECT_SCROLL = 3
+CTRL_TYPE_START_APP = 16   # scrcpy v5: lanza una app en el display virtual
 
 ACTION_DOWN = 0
 ACTION_UP = 1
@@ -1048,6 +1169,16 @@ def _i16fp(v):
 def ctrl_scroll(x, y, w, h, vscroll, hscroll=0.0):
     return struct.pack(">BiiHHhhi", CTRL_TYPE_INJECT_SCROLL, int(x), int(y), int(w), int(h),
                        _i16fp(hscroll), _i16fp(vscroll), 0)
+
+
+def ctrl_start_app(package):
+    """TYPE_START_APP (scrcpy v5): el server resuelve el display virtual solo.
+
+    Formato: u8 tipo | u8 len | utf8 paquete (ControlMessageReader.parseStartApp).
+    Sustituye la carrera de `dumpsys display` + `am start --display` del shell.
+    """
+    b = package.encode("utf-8")[:255]
+    return struct.pack(">BB", CTRL_TYPE_START_APP, len(b)) + b
 
 
 class ScrcpyControl:
@@ -1625,6 +1756,10 @@ async def api_status_handler(request):
     })
 
 
+_wslog = {}          # diagnostico acotado de tipos de mensaje recibidos
+_rawlog = [0]        # primeros frames crudos (debug de framing)
+
+
 async def ws_handler(request):
     ws = web.WebSocketResponse(max_msg_size=4 * 1024 * 1024, heartbeat=15)
     await ws.prepare(request)
@@ -1650,10 +1785,22 @@ async def ws_handler(request):
     try:
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
+                if _rawlog[0] < 6 and "sync" not in msg.data[:40]:
+                    _rawlog[0] += 1
+                    print(f"[ws] raw {msg.data[:180]!r}", flush=True)
                 try:
                     data = json.loads(msg.data)
-                except Exception:
+                except Exception as exc:
+                    print(f"[ws] JSON invalido ({exc}): {msg.data[:120]!r}", flush=True)
                     continue
+                t = data.get("t")
+                if isinstance(t, str) and t not in ("hb", "sync", "idr"):
+                    # Diagnostico acotado (2 por tipo): demuestra si el input del
+                    # viewer llega al relay. Un viewer que solo manda sync/video
+                    # deja el HUD vivo pero ningun evento de puntero (2026-11-25).
+                    if _wslog.get(t, 0) < 200:
+                        _wslog[t] = _wslog.get(t, 0) + 1
+                        print(f"[ws] msg {t} {msg.data[:200]}", flush=True)
                 if data.get("t") == "sync":
                     await ws.send_str(json.dumps({"type": "sync", "s": time.time() * 1000, "c": data.get("c", 0)}))
                 elif data.get("t") == "idr":
@@ -1665,6 +1812,17 @@ async def ws_handler(request):
                         state.need_key.discard(ws)
                 elif data.get("t") == "hb":
                     await ws.send_str("h")      # downlink heartbeat (keeps the client's Wi-Fi radio awake)
+                elif data.get("t") == "cap":
+                    import cap_handler
+                    await cap_handler.handle(state, ws, data)
+                elif data.get("t") in ("pd", "pm", "pu", "ph"):
+                    import pen_handler
+                    await pen_handler.handle(state, data)
+                elif data.get("t") == "pen_test":
+                    # Trazo sintetico por el camino UHID: verifica getevent y
+                    # PenProbe sin depender de que el usuario dibuje.
+                    import pen_handler
+                    await pen_handler.synthetic_test(state)
                 elif data.get("t") == "flash":
                     state.flash_t = time.time()
                     injector.flash(data.get("c", 0))
@@ -1676,7 +1834,8 @@ async def ws_handler(request):
         state.clients.discard(ws)
         state.transports.pop(ws, None)
         state.need_key.discard(ws)
-        print(f"[ws] client disconnected ({len(state.clients)} total)", flush=True)
+        print(f"[ws] client disconnected ({len(state.clients)} total) "
+              f"close_code={ws.close_code} exc={ws.exception()!r}", flush=True)
     return ws
 
 

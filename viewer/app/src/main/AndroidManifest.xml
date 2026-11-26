@@ -21,5 +21,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- PenProbe (F6): se instala en el S25 y se lanza en el display
+             virtual para medir toolType/presion/tilt reales. No tiene
+             launcher: se arranca con `am start -n .../.PenProbeActivity`. -->
+        <activity
+            android:name=".PenProbeActivity"
+            android:exported="true"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize" />
     </application>
 </manifest>

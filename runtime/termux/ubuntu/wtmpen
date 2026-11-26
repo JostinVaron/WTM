@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""wtmpen - gestion del lapiz en X11 para SubstrateOS/ArtCraft.
+
+Uso:
+  wtmpen status              # dispositivos y estado
+  wtmpen test                # monitor en vivo del lapiz (xinput test)
+  wtmpen guard               # daemon: rechazo de palma app-agnostico
+  wtmpen enable|disable      # enable/disable manual del touch (Lorie touch)
+
+El guard desactiva el dispositivo touch mientras llegan eventos de lapiz
+(trazo o hover) y lo reactiva tras WTM_PEN_GRACE_MS sin actividad. Es la
+capa de gestion del sistema: sirve para CUALQUIER app X11 (ArtCraft, Krita,
+GNOME) sin tocar cada aplicacion. Al salir, SIEMPRE deja el touch activo.
+"""
+import os
+import select
+import signal
+import subprocess
+import sys
+import time
+
+DISPLAY = os.environ.get("DISPLAY", ":0")
+PEN = os.environ.get("WTM_PEN_DEVICE", "Lorie pen")
+TOUCH = os.environ.get("WTM_TOUCH_DEVICE", "Lorie touch")
+GRACE_MS = int(os.environ.get("WTM_PEN_GRACE_MS", "600"))
+
+ENV = {**os.environ, "DISPLAY": DISPLAY}
+
+
+def xinput(*args):
+    return subprocess.run(["xinput", *args], env=ENV,
+                          capture_output=True, text=True)
+
+
+def device_id(name):
+    out = xinput("list", "--id-only", name).stdout.strip().splitlines()
+    return out[0].strip() if out and out[0].strip().isdigit() else None
+
+
+def is_enabled(dev_id):
+    for line in xinput("list-props", dev_id).stdout.splitlines():
+        if "Device Enabled" in line:
+            return line.rstrip().endswith("1")
+    return None
+
+
+def set_enabled(dev_id, on):
+    try:
+        xinput("enable" if on else "disable", dev_id)
+    except Exception:
+        pass
+
+
+def status():
+    print(f"display={DISPLAY} grace={GRACE_MS}ms")
+    for name in (PEN, TOUCH):
+        i = device_id(name)
+        print(f"{name}: id={i or 'n/a'} enabled={is_enabled(i) if i else 'n/a'}")
+    print(xinput("list").stdout)
+
+
+def test():
+    i = device_id(PEN)
+    if not i:
+        sys.exit(f"wtmpen: no encuentro '{PEN}' (¿lapiz conectado?)")
+    os.execvp("stdbuf", ["stdbuf", "-oL", "xinput", "test", i])
+
+
+def manual(on):
+    i = device_id(TOUCH)
+    if not i:
+        sys.exit(f"wtmpen: no encuentro '{TOUCH}'")
+    set_enabled(i, on)
+    print(f"{TOUCH}: {'enabled' if on else 'disabled'}")
+
+
+def guard():
+    pen = device_id(PEN)
+    touch = device_id(TOUCH)
+    if not pen or not touch:
+        sys.exit(f"wtmpen guard: faltan {PEN}/{TOUCH}")
+    set_enabled(touch, True)  # estado limpio
+
+    proc = subprocess.Popen(["stdbuf", "-oL", "xinput", "test", pen],
+                            env=ENV, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True, bufsize=1)
+
+    state = {"active": False}
+
+    def restore(*_):
+        if state["active"]:
+            set_enabled(touch, True)
+            state["active"] = False
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+    def on_signal(*_):
+        restore()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
+
+    last = time.monotonic()
+    while True:
+        try:
+            ready, _, _ = select.select([proc.stdout], [], [], 0.1)
+        except (ValueError, OSError):
+            ready = []
+        if ready:
+            line = proc.stdout.readline()
+            if line:
+                last = time.monotonic()
+                if not state["active"]:
+                    state["active"] = True
+                    set_enabled(touch, False)
+            elif proc.poll() is not None:
+                # El servidor X se reinicio: re-resolver IDs y reintentar.
+                restore()
+                time.sleep(1.0)
+                pen = device_id(PEN)
+                touch = device_id(TOUCH)
+                if not pen or not touch:
+                    sys.exit("wtmpen guard: dispositivos perdidos")
+                set_enabled(touch, True)
+                proc = subprocess.Popen(
+                    ["stdbuf", "-oL", "xinput", "test", pen], env=ENV,
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    text=True, bufsize=1)
+                last = time.monotonic()
+                continue
+        if state["active"] and (time.monotonic() - last) * 1000 > GRACE_MS:
+            state["active"] = False
+            set_enabled(touch, True)
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit(__doc__)
+    cmd = sys.argv[1]
+    if cmd == "status":
+        status()
+    elif cmd == "test":
+        test()
+    elif cmd == "guard":
+        guard()
+    elif cmd == "enable":
+        manual(True)
+    elif cmd == "disable":
+        manual(False)
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main()

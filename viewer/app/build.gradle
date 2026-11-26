@@ -1,6 +1,10 @@
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 
+// Firma estable: el keystore vive FUERA del repo (GitHub secret en CI,
+// ~/.config/wtm/ en local). Sin la variable se usa el debug keystore normal.
+def wtmKeystore = System.getenv("WTM_KEYSTORE_FILE")
+
 android {
     namespace 'ai.ashna.wtmviewer'
     compileSdk 34
@@ -9,11 +13,27 @@ android {
         applicationId 'ai.ashna.wtmviewer'
         minSdk 29
         targetSdk 34
-        versionCode 1
-        versionName '0.1.0'
+        versionCode 8
+        versionName '0.1.7-pen8'
+    }
+
+    signingConfigs {
+        stable {
+            if (wtmKeystore) {
+                storeFile file(wtmKeystore)
+                storePassword System.getenv("WTM_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("WTM_KEY_ALIAS")
+                keyPassword System.getenv("WTM_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            if (wtmKeystore) {
+                signingConfig signingConfigs.stable
+            }
+        }
         release {
             minifyEnabled false
         }

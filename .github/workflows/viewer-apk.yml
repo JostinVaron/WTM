@@ -19,8 +19,28 @@ jobs:
           gradle-version: '8.5'
       - name: Prepare project
         run: cd viewer && mv build.gradle.root build.gradle && rm -rf src AndroidManifest.xml
+      - name: Decode stable keystore
+        env:
+          WTM_KEYSTORE_BASE64: ${{ secrets.WTM_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$WTM_KEYSTORE_BASE64" ]; then
+            echo "$WTM_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/wtm-viewer.p12"
+            echo "WTM_KEYSTORE_FILE=$RUNNER_TEMP/wtm-viewer.p12" >> "$GITHUB_ENV"
+            echo "Keystore estable configurado."
+          else
+            echo "::warning::WTM_KEYSTORE_BASE64 no configurado; se usara el debug keystore del runner."
+          fi
       - name: Build debug APK
+        env:
+          WTM_KEYSTORE_PASSWORD: ${{ secrets.WTM_KEYSTORE_PASSWORD }}
+          WTM_KEY_ALIAS: ${{ secrets.WTM_KEY_ALIAS }}
+          WTM_KEY_PASSWORD: ${{ secrets.WTM_KEY_PASSWORD }}
         run: cd viewer && gradle :app:assembleDebug --no-daemon -Dorg.gradle.jvmargs=-Xmx2g
+      - name: Verify APK signature
+        run: |
+          APK=viewer/app/build/outputs/apk/debug/app-debug.apk
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BT/apksigner" verify --print-certs "$APK" | head -6
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:

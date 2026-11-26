@@ -7,7 +7,6 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
-import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -33,16 +32,20 @@ import javax.net.ssl.X509TrustManager
 /**
  * WTM Viewer — viewer nativo del relay (issue #16).
  *
- * v1.1-perf3 — COLA ACOTADA: el HUD ahora reporta qdrop (deltas
- * descartados por cola llena, con keyframe fresco pedido al server)
- * junto a rdrop y cola. Basado en el log perf2 de campo: bitrate real
- * 35 Mbps (no 12 como el default publicado), pipeline estable a 60 fps
- * con 0 corrupcion, y cola que crecia a 75 frames sin disparar drops.
+ * v1.2-cap (F4b) — PANTALLA COMPLETA ABSOLUTA + NEGOCIACION cap.
+ *
+ * v1.3-pen (F5) — S PEN Y MULTI-TOUCH COMPLETOS: TODO lo que toca el panel
+ * viaja al S25 (PenForwarder): presion real (4096 niveles), muestras
+ * historicas (~120 Hz), tilt/orientacion del stylus, rechazo de palma,
+ * multi-touch con pid estable y hover de la pluma. El HUD se alterna con
+ * un toque en la esquina superior derecha (zona del propio HUD — consumida
+ * localmente) o con el boton del S Pen (plumas que lo tienen): ningun
+ * trazo dibujante se roba.
  */
 class MainActivity : Activity() {
 
     companion object {
-        const val BUILD = "1.1-perf3"
+        const val BUILD = "1.3-pen-r2"
     }
 
     private lateinit var prefs: SharedPreferences
@@ -61,6 +64,13 @@ class MainActivity : Activity() {
     private var lastRenderedAt = 0L
     private var measurePersist = 0
 
+    // F5: dimensiones del stream (para mapear tablet -> pantalla del S25).
+    @Volatile private var streamW = 0
+    @Volatile private var streamH = 0
+
+    // F4b: veredicto de la negociacion cap para el HUD (jamas verde falso).
+    @Volatile private var capHudLine = "perfil: esperando respuesta del relay..."
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("wtm", Context.MODE_PRIVATE)
@@ -69,7 +79,38 @@ class MainActivity : Activity() {
             persistCrash(t, e)
             prevHandler?.uncaughtException(t, e)
         }
-        buildConfigUI("")
+        // Auto-conexion (2026-11-25): si ya hay URL + token validos guardados,
+        // la sesion arranca sola en vez de obligar a pulsar "Conectar" en cada
+        // apertura. Con error, el boton "Volver" devuelve a la configuracion.
+        val savedUrl = prefs.getString("base_url", null)
+        val savedToken = prefs.getString("viewer_token", null)
+        if (!savedUrl.isNullOrEmpty() && !savedToken.isNullOrEmpty() &&
+            savedToken.length == 64 && savedUrl.startsWith("https://")) {
+            startStream(savedUrl, savedToken)
+        } else {
+            buildConfigUI("")
+        }
+    }
+
+    /**
+     * PANTALLA COMPLETA ABSOLUTA (F4b): immersive sticky. Oculta status bar
+     * Y la gesture/navigation bar inferior (la barra fina de abajo), y
+     * expande la app bajo ellas. Re-aplicar en onWindowFocusChanged porque
+     * el sistema las restaura tras teclado/gestos/notifications shade.
+     */
+    private fun enterImmersive() {
+        window.decorView.systemUiVisibility =
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+            View.SYSTEM_UI_FLAG_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) enterImmersive()
     }
 
     /** Log -> disco, sincrono: sobrevive a cualquier muerte del proceso. */
@@ -181,12 +222,16 @@ class MainActivity : Activity() {
         root.addView(connectBtn)
         root.addView(status)
         setContentView(root)
+        enterImmersive()   // F4b: fullscreen tambien en la pantalla de config
     }
 
     private fun startStream(url: String, token: String) {
         synchronized(logBuf) { logBuf.setLength(0) }
         persistLog()
         backBtn = null
+        streamW = 0
+        streamH = 0
+        capHudLine = "perfil: esperando respuesta del relay..."
 
         val surfaceView = SurfaceView(this)
         val statusOverlay = TextView(this).apply {
@@ -200,7 +245,8 @@ class MainActivity : Activity() {
         }
         overlay = statusOverlay
 
-        // HUD de perf: esquina superior derecha, tap para alternar.
+        // HUD de perf: esquina superior derecha. F5: ahora se alterna
+        // tocando esa misma esquina (PenForwarder) o con el boton del S Pen.
         val hudView = TextView(this).apply {
             setTextColor(Color.parseColor("#7FFF7F"))
             typeface = Typeface.MONOSPACE
@@ -239,16 +285,32 @@ class MainActivity : Activity() {
         frameRoot = frame
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(frame)
+        enterImmersive()   // F4b: fullscreen ABSOLUTO en el estado de video
         showStatus("viewer v$BUILD — conectando a $url")
 
-        // Tap sobre el video alterna el HUD (hasta v1.2 tactil / v1.3 overlay 2 dedos).
-        surfaceView.setOnTouchListener { _, ev ->
-            if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+        // F5: TODA la pantalla reenvia trazos al S25 (S Pen con presion,
+        // multi-touch, hover). El HUD se alterna desde la esquina sup-derecha
+        // (zona del propio HUD, consumida localmente) o con el boton del S Pen.
+        val penFwd = PenForwarder(
+            view = surfaceView,
+            streamW = { streamW },
+            streamH = { streamH },
+            send = { json -> wsClient?.sendInput(json) },
+            onHudToggle = {
                 hudVisible = !hudVisible
                 runOnUiThread { hud?.visibility = if (hudVisible) View.VISIBLE else View.GONE }
             }
-            true
-        }
+        )
+        surfaceView.setOnTouchListener(penFwd)
+        surfaceView.setOnGenericMotionListener { _, ev -> penFwd.onGeneric(ev) }
+
+        // F4b: leer el hardware REAL del receptor y armar el cap.
+        val capReport = DeviceCapabilities(this).read()
+        val cap = StreamProfile.buildCap(capReport)
+        logMeasure("cap: panel ${capReport.panelW}x${capReport.panelH}@${capReport.refreshExact} " +
+            "decoder=${capReport.decoderName} techo=${capReport.decoderBitrateMax / 1_000_000}M " +
+            "link=${capReport.linkMbps}Mbps -> cap w=${cap.w} h=${cap.h} fps=${cap.fps} " +
+            "bitrate_max=${cap.bitrateMax}")
 
         surfaceView.holder.setKeepScreenOn(true)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
@@ -266,18 +328,38 @@ class MainActivity : Activity() {
                         Toast.makeText(this@MainActivity, "WTM: video activo", Toast.LENGTH_SHORT).show()
                         startHudLoop()
                     } },
-                    { wsClient?.requestKey() }
+                    { wsClient?.requestKey() },
+                    lowLatency = intent.getBooleanExtra("low_latency", true),
+                    queueMax = intent.getIntExtra("queue_max", 8)
                 )
                 wsClient = WsClient(
                     baseUrl = url,
                     viewerToken = token,
                     onConfig = { codec, width, height, csd ->
+                        streamW = width    // F5: mapa de tablet -> pantalla S25
+                        streamH = height
                         showStatus("stream: $codec ${width}x${height}")
                         decoder?.configure(codec, width, height, csd)
                     },
                     onFrame = { data, pts -> decoder?.feed(data, pts) },
-                    onStatus = { msg -> showStatus(msg) }
+                    onStatus = { msg -> showStatus(msg) },
+                    // F4b: veredicto del cap_ack -> HUD. Jamas verde falso.
+                    onCapAck = { json ->
+                        val ack = StreamProfile.parseCapAck(json)
+                        capHudLine = StreamProfile.hudLine(ack)
+                        logMeasure("cap_ack: applied=${ack.applied} " +
+                            "profile=${ack.w}x${ack.h}@${ack.fps} ${ack.bitrate}bps " +
+                            "reason=${ack.reason}")
+                        runOnUiThread {
+                            hud?.setTextColor(
+                                if (ack.applied && ack.w > 0) Color.parseColor("#7FFF7F")
+                                else Color.parseColor("#FF6A6A")
+                            )
+                        }
+                    }
                 )
+                // F4b: el cap del hardware real se fija ANTES de connect().
+                wsClient?.setCap(StreamProfile.capJson(cap))
                 wsClient?.connect()
             }
 
@@ -331,8 +413,10 @@ class MainActivity : Activity() {
                 val lat = ws?.latencyAvg() ?: 0.0
                 val rtt = ws?.rttMs() ?: -1.0
                 val txt = String.format(
-                    "%.0f fps  lat %.1f ms  rtt %.0f ms | %s | render %d  rdrop %d  qdrop %d  cola %d",
-                    fps, lat, rtt, d.decoder, d.rendered, d.renderDrops, d.queueDrops, d.queueDepth
+                    "%.0f fps  lat %.1f ms  dec %.1f ms  rtt %.0f ms | %s | render %d  rdrop %d  qdrop %d  cola %d  ll %d  qcap %d\n%s",
+                    fps, lat, d.decodeMs, rtt, d.decoder, d.rendered, d.renderDrops, d.queueDrops, d.queueDepth,
+                    if (d.lowLatency) 1 else 0, d.queueCap,
+                    capHudLine   // F4b: linea de perfil (verde=aplicado y verificado)
                 )
                 tick++
                 if (tick % 2 == 1) logMeasure("hud: $txt")

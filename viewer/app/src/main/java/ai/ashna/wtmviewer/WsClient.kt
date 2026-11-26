@@ -21,18 +21,24 @@ import kotlin.concurrent.thread
  * WebSocket minimo (RFC 6455) sobre socket TLS para hablar con el relay WTM.
  * Mismo protocolo que el cliente web (server.py / hevc.py).
  *
- * v1.1-perf3 — GATE del offset de reloj: perf2 mostro lecturas "lat
- * -215.9 ms" durante los primeros ~6 s, artefacto del offset NTP aun sin
- * converger (las primeras muestras de sync todavia no han llegado). Ahora
- * la latencia por frame solo se reporta tras >=5 muestras de sync validas;
- * antes de eso el HUD muestra lat 0.0 (sin dato), no un numero falso.
+ * v1.2-cap (F4b) — NEGOCIACION cap/cap_ack: tras el login se envia el cap
+ * del hardware del receptor (StreamProfile.capJson); el relay clampa al
+ * techo del emisor, aplica y VERIFICA contra el cmdline del scrcpy vivo, y
+ * responde cap_ack. onCapAck lleva el veredicto al HUD (jamas verde falso).
+ * Compatibilidad: si el relay es viejo y no conoce "cap", simplemente no
+ * responde — el HUD queda en "sin respuesta del relay" y el stream sigue.
+ *
+ * v1.3-pen (F5) — CANAL DE INPUT: sendInput() expone el mismo WebSocket al
+ * PenForwarder (pd/pm/pu/ph, un mensaje por puntero con presion/tilt reales).
  */
 class WsClient(
     private val baseUrl: String,
     private val viewerToken: String,
     private val onConfig: (codec: String, width: Int, height: Int, csd: ByteArray) -> Unit,
     private val onFrame: (data: ByteArray, pts: Long) -> Unit,
-    private val onStatus: (String) -> Unit
+    private val onStatus: (String) -> Unit,
+    /** F4b: veredicto de la negociacion cap (aplicado+verificado / rechazado). */
+    private val onCapAck: (org.json.JSONObject) -> Unit = {}
 ) {
     companion object {
         private const val HB_MS = 25L          // como el cliente web
@@ -42,6 +48,27 @@ class WsClient(
     private var socket: SSLSocket? = null
     private val closed = AtomicBoolean(false)
     private var sessionCookie: String = ""
+    private val sendExec = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "wtm-input").apply { isDaemon = true }
+    }
+
+    /** Mensaje cap listo para enviar (F4b); se envia una vez tras el login. */
+    @Volatile private var pendingCapJson: String? = null
+
+    /** MainActivity lo fija antes de connect(): el cap del hardware real. */
+    fun setCap(json: String) { pendingCapJson = json }
+
+    /** F5: canal de input (pd/pm/pu/ph) por el mismo WebSocket del stream. */
+    /**
+     * Canal de input del viewer (PenForwarder). Se ejecuta en un hilo propio:
+     * onTouch corre en el hilo de UI y Android lanza NetworkOnMainThreadException
+     * al escribir el socket desde ahi (el catch de sendRaw la tragaba y NINGUN
+     * evento llegaba al relay; bug medido 2026-11-25 con logcat). Un unico
+     * executor conserva el orden de los eventos.
+     */
+    fun sendInput(json: String) {
+        try { sendExec.execute { sendJson(json) } } catch (_: Exception) {}
+    }
 
     // --- reloj/latencia (v1.1-perf1) ---
     @Volatile private var offsetMs = 0.0
@@ -66,6 +93,9 @@ class WsClient(
                     sendJson("""{"t":"sync","c":${System.currentTimeMillis()}}""")
                     Thread.sleep(120)
                 }
+                // F4b: el cap va justo tras el login+sync — es la primera
+                // cosa que el relay negocia en la sesion.
+                pendingCapJson?.let { sendJson(it) }
                 startHeartbeat()
                 readLoop()
             } catch (e: Exception) {
@@ -237,7 +267,7 @@ class WsClient(
             if (len == 126L) {
                 len = dis.readUnsignedShort().toLong()
             } else if (len == 127L) {
-                len = dis.readLong()
+                len = dis.readLong().toLong()
             }
             if (masked) throw IOException("server no debe enmascarar frames")
 
@@ -254,6 +284,11 @@ class WsClient(
                                 m!!.getString("description"), android.util.Base64.NO_WRAP
                             )
                             onConfig(m.getString("codec"), m.getInt("width"), m.getInt("height"), csd)
+                        }
+                        "cap_ack" -> {
+                            // F4b: veredicto de la negociacion (jamas verde falso:
+                            // applied solo si el relay VERIFICO el cmdline del scrcpy).
+                            onCapAck(m ?: JSONObject())
                         }
                         "sync" -> {
                             // Server: {"type":"sync","s":server_ms,"c":echo}.
@@ -313,6 +348,14 @@ class WsClient(
 
     private fun sendJson(s: String) = sendRaw(0x1, s.toByteArray(Charsets.UTF_8))
 
+    /**
+     * Escritura serializada del socket. El hilo de sync/heartbeat y el hilo
+     * de UI (PenForwarder) escriben en el MISMO socket: sin este lock los
+     * frames se intercalan (cabecera de uno + payload de otro), el server
+     * recibe UTF-8 invalido y cierra con 1007. Bug medido en campo 2026-11-25:
+     * el primer toque o trazo mataba la sesion.
+     */
+    @Synchronized
     private fun sendRaw(opcode: Int, data: ByteArray) {
         try {
             val out = socket?.getOutputStream() ?: return
@@ -334,11 +377,14 @@ class WsClient(
             out.write(header.toByteArray())
             out.write(data)
             out.flush()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            android.util.Log.d("WTM", "sendRaw error: $e")
+        }
     }
 
     fun close() {
         closed.set(true)
+        try { sendExec.shutdownNow() } catch (_: Exception) {}
         try { socket?.close() } catch (_: Exception) {}
     }
 }

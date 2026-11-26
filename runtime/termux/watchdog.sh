@@ -25,8 +25,24 @@ phone_adb(){
   done
   return 1
 }
+cur_display(){
+  "$ADB" -s "$(phone_adb)" shell dumpsys display 2>/dev/null | tr -d '\r' \
+    | grep -oE "displayId=[0-9]+, uniqueId='virtual:[^']*scrcpy[^']*'" \
+    | head -1 | grep -oE '[0-9]+' | head -1
+}
+# DisplayId real del primer mouse (Input Reader State). Vacio = no hay mouse
+# o el parser no pudo leerlo: en ese caso NO se toca la asociacion existente.
+mouse_display(){
+  "$ADB" -s "$(phone_adb)" shell dumpsys input 2>/dev/null | tr -d '\r' | awk '
+    /^ *Device [0-9]+:/ {mouse=0}
+    /Sources:.*MOUSE/ {mouse=1}
+    /DisplayId: [0-9]+/ && mouse {print $2; exit}'
+}
+routed_ok(){ [ -n "${1:-}" ] && [ "$(cat "$PREFIX/tmp/rd-route.display" 2>/dev/null)" = "$1" ]; }
 
+CYCLE=0
 while true; do
+  CYCLE=$((CYCLE + 1))
   if [ -e "$PREFIX/tmp/rd-dex-stopped" ]; then
     sleep "$INTERVAL"
     continue
@@ -41,6 +57,25 @@ while true; do
       # dex.sh re-aplica la asociación nativa del mouse en cada arranque
       # (requisito §7: la asociación es per-display y muere con scrcpy).
       ./dex.sh >>"$LOG" 2>&1
+      rm -f "$PREFIX/tmp/rd-route.display"
+    elif [ $((CYCLE % 6)) -eq 0 ] && [ -x ./route-input.sh ]; then
+      # Verificación read-only cada 60 s. Solo se re-asocia si el display
+      # cambió (marcador) o si el mouse declara otro DisplayId. Re-aplicar
+      # una asociación sana cada minuto puede interferir con el ratón real.
+      DID=$(cur_display || true)
+      if [ -n "$DID" ]; then
+        MDISP=$(mouse_display || true)
+        if ! routed_ok "$DID" || { [ -n "$MDISP" ] && [ "$MDISP" != "$DID" ]; }; then
+          if out=$(MOUSE_DESCRIPTOR="${MOUSE_DESCRIPTOR:-}" ./route-input.sh 2>&1); then
+            printf '%s\n' "$out" | sed 's/^/[watchdog-route] /' >>"$LOG"
+            log "mouse re-asociado al display $DID (estaba: ${MDISP:-?})"
+            echo "$DID" >"$PREFIX/tmp/rd-route.display"
+          else
+            rc=$?
+            log "route-input falló (rc=$rc); reintenta en 60 s"
+          fi
+        fi
+      fi
     fi
   fi
   sleep "$INTERVAL"

@@ -39,7 +39,9 @@ hardened runtime via Path A.**
    once with the Android pairing flow; do not publish pairing keys.
 6. Termux:Widget is installed and the shortcut scripts are executable. Termux:Boot is
    optional and must be configured separately.
-7. The tablet has Chrome with WebCodecs and can reach the phone's relay IP/port.
+7. The tablet can reach the phone's relay IP/port. The preferred client is the
+   native WTM Viewer APK (built by `viewer-apk.yml`); Chrome with WebCodecs is
+   the browser fallback.
 
 ## Start
 
@@ -55,11 +57,13 @@ The wizard recovers the full chain and is reboot-proof: it verifies
 ADB on port 5555 (guided Wireless Debugging dialog when the port is
 down after a reboot), detects the hotspot IP (`swlan0` via
 `adb shell ip`), syncs `server.env`, checks that the tablet is on the
-hotspot, starts the service and waits for `scrcpy_alive`, then shows
-the exact URL, TLS fingerprint and any configured token in a
-persistent dialog (also copied to the clipboard). Verified 4/4
-across real S25 reboots (2026-11-10, issue #15). The old
-`start-dex.sh` shortcut remains as a compatibility wrapper.
+hotspot, starts the service and waits for `scrcpy_alive`. When the
+tablet's ADB is connected, it also updates the viewer's saved
+`base_url` and launches the native WTM Viewer. It then shows the URL
+and TLS fingerprint in a persistent dialog (also copied to the
+clipboard); it does **not** print tokens. Verified 4/4 across real S25
+reboots (2026-11-10, issue #15). The old `start-dex.sh` shortcut
+remains as a compatibility wrapper.
 
 Under the hood the wizard still requests a wake lock when available
 and calls:
@@ -100,8 +104,9 @@ Verify that `/api/status` no longer responds and no scrcpy virtual display remai
 With the v0.4.0 wizard the post-reboot flow is no longer
 best-effort: after a reboot the user taps `DeX` and the wizard
 recovers ADB (or guides the Wireless Debugging dialog), re-detects
-the hotspot IP and starts the service. The legacy watchdog path
-below still exists as a fallback.
+the hotspot IP, starts the service, updates the native viewer's saved
+URL and launches it when the tablet's ADB is available. The legacy
+watchdog path below still exists as a fallback.
 
 ## Boot and recovery behavior
 
@@ -146,7 +151,7 @@ client/source metrics.
 - Wi-Fi changes IP/subnet or isolates clients.
 - Relay killed while the viewer still has a WebSocket.
 - scrcpy server exits, virtual display is removed or Android resets the encoder.
-- Tablet Chrome sleeps, reloads or loses WebCodecs state.
+- Browser fallback only: tablet Chrome sleeps, reloads or loses WebCodecs state.
 
 Do not claim restart-proof behavior unless each case is exercised and measured on the
 published support matrix.
@@ -167,14 +172,21 @@ published support matrix.
    (never overwriting existing credentials);
 6. installs Termux:Widget shortcuts and the Termux:Boot hook.
 
-After installation the bridge requires a browser login: open
-`https://<phone-ip>:8443/`, **compare the certificate fingerprint shown on the
-login page with the value printed at install time** (`~/.config/wtm/cert-fingerprint.txt`),
-and only then enter one of the generated tokens. A mismatch means the connection may be
+After installation the preferred client is the native WTM Viewer APK. The
+DeX wizard updates its saved URL and launches it on the tablet when ADB is
+available; the app auto-connects and checks the TLS fingerprint. The
+generated viewer/admin tokens remain on disk in
+`~/.config/wtm/auth-tokens.json` and are only needed for the browser
+fallback.
+
+Browser fallback: open `https://<phone-ip>:8443/`, **compare the
+certificate fingerprint shown on the login page with the value printed at
+install time** (`~/.config/wtm/cert-fingerprint.txt`), and only then enter
+one of the generated tokens. A mismatch means the connection may be
 intercepted: do not enter tokens. The admin token unlocks the control panel
-(`https://<phone-ip>:8443/panel`); the viewer token allows watching and input but not
-start/stop actions. Local health checks use the unauthenticated machine-local
-`https://127.0.0.1:8443/healthz`.
+(`https://<phone-ip>:8443/panel`); the viewer token allows watching and input
+but not start/stop actions. Local health checks use the unauthenticated
+machine-local `https://127.0.0.1:8443/healthz`.
 
 When the phone changes network/IP, run `bash update-network.sh` in `$HOME/dex` to
 refresh the listener bind and regenerate the certificate for the new IP, then verify
