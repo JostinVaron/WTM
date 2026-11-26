@@ -127,8 +127,12 @@ Evidencia `getevent -lt /dev/input/event14` del S25 (v6):
 
 Verificación del dedo: stylus y 0.4 s después un tap de dedo en (1000,700);
 PenProbe mostró `tool: FINGER` (con la ventana anterior se descartaba).
-Mientras la pluma se mueve en hover, el táctil se bloquea (Galaxy Tab); al
-alejarla, el respaldo de 250 ms lo libera.
+El hover ya **no** bloquea el táctil: el viewer y el relay solo rechazan
+dedos mientras la pluma **toca** (down/move/up/cancel) y 250 ms después; el
+hover solo mueve el cursor de la pluma. La palma se filtra por
+`TOOL_TYPE_PALM`/`FLAG_CANCELED`. (Antes el hover se trataba como activo y
+bloqueaba todos los dedos; ver la regresión 2026-11-26 en
+`ubuntu-s-pen.md`.)
 
 Variables:
 
@@ -237,8 +241,9 @@ adb -s <phone> shell 'timeout 8 getevent -lt /dev/input/event14'
 
 ## 11. Limitaciones conocidas
 
-- El hover activo bloquea táctil/mouse por diseño (comportamiento Galaxy Tab).
-- Un hover estático sin `HOVER_EXIT` cae por el respaldo de 1 s; no es
+- El hover ya no bloquea táctil/mouse; solo el contacto de la pluma + 250 ms
+  (el hover mantiene el cursor de la pluma, no el rechazo de dedos).
+- Un hover estático sin `HOVER_EXIT` cae por el respaldo de 250 ms; no es
   exactamente el bloqueo indefinido de una EMR física, pero evita el bug.
 - La latencia instrumentada está en [latency.md](latency.md): `lat` (PTS
   scrcpy→llegada) y `dec` (llegada→render). El pen-to-photon completo

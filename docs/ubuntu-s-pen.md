@@ -10,7 +10,8 @@ WTM (2000x1200), GNOME 49 X11 en el proot `ubuntu-gnome`.
 S Pen tablet → viewer → relay WTM → UHID (display virtual)
   → Android InputReader → Termux:X11 (Lorie pen/eraser)
   → XInput2 → GNOME/Krita/ArtCraft
-Dedo tablet → viewer → relay → INJECT_TOUCH → Termux:X11 (Lorie touch, Direct touch)
+Dedo tablet → viewer → relay → INJECT_TOUCH → Termux:X11 (Lorie touch;
+  touchMode=1: trackpad dentro de X, toque directo en apps Android del display)
 Mouse BT   → (directo en el S25) → route-input → Lorie mouse
 ```
 
@@ -22,28 +23,42 @@ Mouse BT   → (directo en el S25) → route-input → Lorie mouse
   Tilt X=33, Wheel=−91, 170 muestras, tip press/release.
 - Hover UHID: motion sin presión ni botones.
 - Dedo con `touchMode=3` (Direct touch): 78 eventos XI2
-  `TouchBegin/Update/End` en `Lorie touch`.
+  `TouchBegin/Update/End` en `Lorie touch`. **Producción usa `touchMode=1`**
+  (trackpad) por estabilidad con GNOME; el toque directo sigue en las apps
+  Android del display (fuera de X).
 - Krita: trazo con **grosor variable por presión** (captura
   `krita-stroke.png`).
 - Mouse BT: ruta `TOOL_TYPE_MOUSE` independiente de `touchMode`; no se ve
   afectado.
 
-## Rechazo de palma (3 capas activas; guard retirado)
+## Rechazo de palma (2 capas activas; guard retirado)
 
-1. **Android (medido)**: mientras el stylus toca, suprime el touch
+1. **Android (medido)**: mientras el stylus **toca**, suprime el touch
    inyectado — test stylus DOWN + swipe de dedo → **0 TouchBegin**.
-2. **Viewer v8** (`PenForwarder`): `penInRange` se activa con
-   `HOVER_ENTER/MOVE` o contacto y se libera con `HOVER_EXIT` (+ timeout
-   de seguridad 3 s). Mientras está en rango descarta dedos y cancela los
-   ya apoyados. Antes la fuga era el hover estático entre trazos (>250 ms
-   liberaba el táctil).
-3. **Relay**: hover (`a=7`) bloquea dedos; `HOVER_EXIT` (`a=10`) libera.
-4. ~~**Ubuntu — `wtmpen guard`**~~ **RETIRADO (2026-11-26)**: toglear
+2. **Viewer + relay (solo contacto)**: el viewer rechaza dedos solo si
+   `now < stylusActiveUntil`, que se arma al **tocar** (down/up/cancel) y
+   dura `STYLUS_HOLDOFF_MS` = 250 ms. El relay hace lo mismo:
+   `_stylus_active_until` se arma solo en `a=0/1/2/3`, **no en hover
+   (`a=7`)**. El hover solo mueve el cursor de la pluma y emite `ph a=7`;
+   `HOVER_EXIT` (`a=10`) limpia la ventana al instante. `penInRange` del
+   viewer ya no descarta dedos; es solo estado/timeout. La palma se filtra
+   por `TOOL_TYPE_PALM`/`FLAG_CANCELED`.
+3. ~~**Ubuntu — `wtmpen guard`**~~ **RETIRADO (2026-11-26)**: toglear
    `Lorie touch` (`xinput disable/enable`) con la sesión viva dispara
    `MetaInputDeviceX11 ... has been already disposed` en GNOME Shell
-   (`keyboard.js:1105`) y, con `blur-my-shell`, buguea el shell. La palma
-   queda cubierta por las capas 1-3. `wtmpen guard` no debe arrancarse; se
-   conserva solo como diagnóstico.
+   (`keyboard.js:1105`) y, con `blur-my-shell`, buguea el shell. `wtmpen
+   guard` no debe arrancarse; se conserva solo como diagnóstico.
+
+### Regresión 2026-11-26 (por qué dejó de funcionar el táctil)
+
+La versión anterior trataba el **hover** como "stylus activo" en el viewer
+(`penInRange`) y en el relay (`a=7`): mientras el S Pen estaba cerca,
+**todos** los dedos se descartaban. Como el S Pen casi siempre está en la
+mano/cerca, el táctil dejó de funcionar; el lápiz (UHID) y el mouse (ruta
+física) no pasan por ese filtro, por eso solo ellos respondían. El APK del
+viewer quitó su capa, pero el relay seguía con el módulo viejo en memoria
+hasta reiniciarlo. Fix definitivo: **el hover no bloquea; solo el contacto
+de la pluma + 250 ms**.
 
 ## Herramientas
 
@@ -60,8 +75,14 @@ wtmpen enable|disable
   relay si falta, display virtual, `termux-x11 :0`, activity en el display,
   sesión GNOME con verificación de estabilidad (mismo gnome-shell 4 s) y
   `ubuntu-watchdog`.
-- `WTM_START_APP=com.termux.x11/.MainActivity` en `server.env`: el relay
-  lanza la activity al crear el display.
+- `WTM_START_APP=com.termux.x11` en `server.env`: el relay lanza ese
+  **paquete** en el display al crearlo. scrcpy `TYPE_START_APP` espera un
+  paquete, **no** `paquete/actividad`: con `com.termux.x11/.MainActivity`
+  el log dice `No app found for package "..."`, el display nace en el
+  launcher y el relay entra en bucle de reconexión. Verificado:
+  `START_APP com.termux.x11` → `Starting app "Termux:X11" [com.termux.x11]
+  on display N`. (`am start ... -n com.termux.x11/.MainActivity` sí usa la
+  forma `paquete/actividad`; son APIs distintas.)
 - **Bus de sistema nuevo**: el socket `system-bus49` sobrevive a la sesión
   pero el daemon/fake-logind mueren con el namespace del proot. Reutilizarlo
   hace que GNOME crashee en `LoginManagerSystemd` ("Connection refused").
@@ -171,8 +192,9 @@ wtmpen enable|disable
 - `blur-my-shell@aunetx` **desactivada** (`gnome-extensions disable ...`).
   Cosmética; reactivable con `gnome-extensions enable ...` asumiendo el riesgo.
 - Guard **matado y verificado** (sin `python3 /usr/local/bin/wtmpen guard`);
-  el widget ya no lo arranca. La palma se bloquea en 3 capas: Android
-  (stylus suprime touch), viewer v8 (`penInRange`) y relay (hover).
+  el widget ya no lo arranca. La palma se filtra en 2 capas: Android
+  (stylus suprime touch mientras toca) y viewer/relay (solo contacto de la
+  pluma + 250 ms; **el hover no bloquea**).
 - `touchMode=1` (Trackpad): el dedo mueve el cursor; el lápiz sigue directo
   con presión; el mouse sigue siendo mouse.
 - Mouse: el watchdog **verifica cada 60 s en modo read-only** el `DisplayId`
@@ -188,7 +210,10 @@ wtmpen enable|disable
 `bash ~/.config/wtm/bin/wtm-stability-check.sh` (Termux). Mide: healthz, X,
 GNOME por D-Bus, ausencia del guard, display scrcpy, mouse asociado,
 alternancia 3 taps touch + 3 trazos stylus con presión (conteo XI2),
-`Gjs-CRITICAL` nuevos y captura. Corrida 2026-11-26 12:06 (tras la limpieza
-de bloatware): **PASS=12 FAIL=0 WARN=0** (6 clicks/6 releases touch, 15
-eventos de lápiz, 0 CRITICALs nuevos, captura 1.3 MB). Limpieza y
-rendimiento: `docs/ubuntu-performance-cleanup.md`.
+`Gjs-CRITICAL` nuevos y captura. Corrida 2026-11-26 13:35 (display 16):
+**PASS=12 FAIL=0 WARN=0** (6/6 touch, 15 eventos de lápiz, 0 CRITICALs
+nuevos, captura 1.33 MB). **Ojo**: el chequeo inyecta con
+`input -d <display>`; si el PenProbeActivity u otra app Android está en
+primer plano en el display, la inyección va a esa app y el X da 0/0
+(falso negativo). Deja `com.termux.x11` al frente antes de correrlo.
+Limpieza y rendimiento: `docs/ubuntu-performance-cleanup.md`.

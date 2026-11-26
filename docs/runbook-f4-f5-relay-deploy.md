@@ -151,7 +151,11 @@ La Fase 3 ya **no** requiere parchear `scrcpy-server`: se usa el `scrcpy-server`
 
 - `server.py` envía `TYPE_START_APP` (16) por el canal de control de scrcpy
   justo después de conectar, con `WTM_START_APP` (default
-  `com.android.settings`).
+  `com.android.settings`). Debe ser un **paquete** (`com.termux.x11`,
+  `com.android.settings`), no `paquete/actividad`: con
+  `com.termux.x11/.MainActivity` scrcpy registra
+  `No app found for package "..."`, el display queda vacío y el relay
+  reintenta en bucle.
 - Evita la carrera de `dumpsys display` que dejaba el display virtual sin
   capa y el viewer mostraba verde.
 - Medición: captura del display virtual (`screencap -d <sf-id>`) 2000x1200,
@@ -235,8 +239,10 @@ La Fase 3 ya **no** requiere parchear `scrcpy-server`: se usa el `scrcpy-server`
 
 ### Variables nuevas
 
-- `WTM_START_APP` (default `com.android.settings`): app que se abre en el
-  display virtual para poblarlo (F3).
+- `WTM_START_APP` (default `com.android.settings`): **paquete** que se
+  abre en el display virtual para poblarlo (F3). Para el escritorio Ubuntu:
+  `com.termux.x11`. No usar `com.termux.x11/.MainActivity` (scrcpy
+  `START_APP` no acepta `paquete/actividad`).
 - `WTM_PALM_REJECT` (default `1`): rechazo de palma de respaldo en el relay.
 - `WTM_PIN_PROFILE=1` sigue fijando 2000x1200@60 y 35 Mbps.
 
@@ -274,8 +280,9 @@ Evidencia (`getevent -lt /dev/input/event14` del S25):
 [57717.300590] EV_KEY BTN_DIGI UP       # respaldo, 1.02 s
 ```
 
-Mientras la pluma se mueve en hover el táctil sigue bloqueado (nativo Galaxy
-Tab); al alejarla, HOVER_EXIT lo libera sin esperar.
+El hover ya no bloquea el táctil; solo el contacto de la pluma + 250 ms.
+HOVER_EXIT limpia la ventana al instante. (El bloqueo por hover era la
+regresión que dejó el dedo muerto; ver `ubuntu-s-pen.md`.)
 
 ### APK 0.1.3-pen4 y firma estable
 

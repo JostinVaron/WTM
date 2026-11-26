@@ -97,9 +97,10 @@ if [ "$OK" = 1 ]; then
       < "$HOME/.config/wtm/bin/wtmpen" 2>/dev/null || true
   fi
   # Guard de palma RETIRADO: alternar enable/disable de Lorie touch con la
-  # sesion viva bugea gnome-shell (medido). La palma se bloquea 3 capas antes
-  # (Android suprime touch con stylus, viewer v8 penInRange, relay hover) y el
-  # dedo ya no toca directo: es trackpad. wtmpen queda para pruebas manuales.
+  # sesion viva bugea gnome-shell (medido). La palma se filtra en 2 capas:
+  # Android suprime touch con el stylus TOCANDO; viewer/relay rechazan dedos
+  # solo mientras la pluma toca (+250 ms), no en hover. El dedo va como
+  # trackpad. wtmpen queda para pruebas manuales.
   # Watchdog: relanza la activity si LMKD la mata y protege app/server.
   if ! pgrep -f 'ubuntu-watchdog.sh' >/dev/null; then
     log "arrancando ubuntu-watchdog"
