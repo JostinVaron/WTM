@@ -19,7 +19,7 @@ if [ ! -d "$SRC/.git" ]; then
   gh repo clone "storytold/$APP" "$SRC" -- --depth=1 >>"$LOG" 2>&1
 fi
 
-REV=$(grep -oE 'storytold/craft-libs", rev = "[0-9a-f]+"' "$SRC/Cargo.toml" | head -1 | grep -oE '[0-9a-f]+' | head -1 || true)
+REV=$(sed -nE 's/.*storytold\/craft-libs", rev = "([0-9a-f]{7,40})".*/\1/p' "$SRC/Cargo.toml" | head -1)
 [ -n "${REV:-}" ] || { echo "no encuentro el rev de craft-libs en $SRC/Cargo.toml"; exit 1; }
 
 if [ ! -d "$CL/.git" ]; then git init -q "$CL"; fi

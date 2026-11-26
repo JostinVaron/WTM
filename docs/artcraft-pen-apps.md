@@ -34,6 +34,24 @@ que usan lápiz y que la operación no dependa de nadie más.
 Blender y Krita no pasan por winit/egui: leen el tableta XInput2 directo. El
 guion de palma (`wtmpen guard`) sigue siendo el mismo para todas.
 
+### Blender y Krita (XInput2 nativo)
+
+- **Krita**: ya recibe presión y tilt; no necesita nada.
+- **Blender 5.0.1**: lee el tableta XInput2 al arrancar, así que `Lorie pen`
+  debe existir **antes** de abrir Blender:
+  ```sh
+  DISPLAY=:0 xinput list --long "Lorie pen"   # debe listar Pressure/Tilt/Rotary
+  ```
+  Si no existe, haz un trazo con el S Pen en la tablet (crea el UHID) y vuelve
+  a abrir Blender. Tras reiniciar el relay, `_precreate_pen` lo crea al
+  arrancar y Blender lo ve desde el primer inicio.
+  Verificación: Sculpt (Draw) o Grease Pencil; el radio debe variar con la
+  presión. La palma la filtra `wtmpen guard`.
+- **Figma**: es web; la presión llega por Pointer Events del navegador. La
+  imagen no trae Chromium/Chrome instalado, así que Figma corre en el
+  navegador que uses (o se instala Chromium en el proot). No pasa por el
+  puente de las apps Craft.
+
 ## Parche único para la suite Craft (`craft-libs`)
 
 PhotoCraft/VectorCraft no tienen su `eframe::App` en su repo: usan la crate
@@ -55,6 +73,11 @@ Piezas: `wtm-pen-shared.sh`, `wtm-pen-shared-patch.py`,
 `pen_bridge_ui_shell.rs`. El parche es idempotente y se reaplica tras cada
 `git reset` de craft-libs. Para volver a la app sin lápiz:
 `cp -p /usr/bin/<app>.pre-pen /usr/bin/<app>`.
+
+PR upstream del parche compartido: `storytold/craft-libs#3647`
+(rama `JostinVaron:feat/pen-bridge`). Mientras se revisa, el script usa el
+`[patch]` local de arriba; cuando se mergee, basta subir la rev de
+`craft-libs` en la app y quitar la tabla local.
 
 El aplicador app-level (`wtm-pen-app.sh`) sigue sirviendo para apps con
 `eframe::App` propio (LightCraft y futuras apps fuera del driver).
