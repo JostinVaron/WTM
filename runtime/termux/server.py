@@ -908,7 +908,7 @@ async def _precreate_pen(state):
         h = int(getattr(state, "scrcpy_h", 0))
         if w > 0 and h > 0 and scrcpy_control.writer is not None:
             try:
-                pen_handler._ensure(state)
+                pen_handler._ensure(pen_handler._srv_module(), state)
                 print("[pen] UHID precreado para el display virtual", flush=True)
             except Exception as exc:
                 print(f"[pen] precreate: {exc}", flush=True)
