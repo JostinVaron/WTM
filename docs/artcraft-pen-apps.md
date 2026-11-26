@@ -1,88 +1,84 @@
-# S Pen en las craft apps — entrega app-level y operativa
+# S Pen en las apps de diseño — estado real y operación
 
-Estado 2026-11-26. Objetivo: que el S Pen funcione con presión en las apps
-que usan lápiz y que la operación no dependa de nadie más.
+Estado 2026-11-26. El lápiz ya funciona en Linux/X11. Lo que faltaba no era
+soporte en las apps, sino que el dispositivo `Lorie pen` existiera mientras se
+dibuja.
 
-## Por qué app-level (y no solo sistema)
+## Cómo llega la presión
 
-- Linux/X11 **sí** reconoce el lápiz: `Lorie pen` con Abs Pressure 0..65535,
-  Tilt X/Y y Abs Rotary Z (medido).
-- Quien lo descarta es **winit**: entrega el puntero pero no los valuadores
-  del tableta a egui. Las apps ya tienen el camino de presión
-  (`pen_force()` lee `egui::Event::Touch { force }`; el brush usa
-  `pressure_radius/flow`). Falta la entrega del evento.
-- El puente `pen_bridge` (XInput2 con `rust-motion-tablet` 1.1) inyecta ese
-  `Touch { force }` en el `raw_input_hook` de la app. No se reescribe el
-  brush para presión.
-- El PR compartido `storytold/egui#61` (egui-winit) se cerró por conflicto
-  de `objc2` (rust-motion-tablet fija 0.6.4; el eframe del fork main exige
-  ^0.6.5). Las apps fijan el fork en `6d518fc`, donde `^0.6.4` es válido;
-  por eso la entrega app-level es la que funciona hoy.
+1. El S Pen se relaya por UHID a Termux:X11 (`pen_handler.py`) y el servidor X
+   crea `Lorie pen` con `Abs Pressure` (0..65535), `Abs Tilt X/Y` y
+   `Abs Rotary Z`.
+2. `Lorie pen` **solo aparece cuando hay un evento de stylus**: el primer trazo,
+   o la pre-creación al arrancar el relay (`_precreate_pen`, commit `9be209d`).
+3. Las apps lo leen por **XInput2 crudo en una segunda conexión X** (x11rb),
+   porque winit descarta esos valuadores. Ese es el punto que LightCraft no
+   tenía y que sí traen PhotoCraft y VectorCraft.
 
-## Apps de diseño: camino real
+## Matriz
 
-| App | Cómo recibe el lápiz | Estado |
+| App | Soporte del lápiz | Acción |
 |---|---|---|
-| PhotoCraft | `eframe::App` propio (`crates/ui-egui`) | `wtm-pen-app.sh photocraft` |
-| VectorCraft | ídem | `wtm-pen-app.sh vectorcraft` |
-| FilmCraft / EffectCraft | ídem | `wtm-pen-app.sh <app>` |
-| LightCraft | `eframe::App` propio (`apps/lightcraft`) | instalado; `wtm-pen-app.sh lightcraft` |
-| Blender 5.0.1 | XInput2 nativo (`GHOST`) | sin parche; el UHID debe existir antes de abrirlo |
-| Krita | XInput2 nativo | ya funciona |
-| Figma | web (Pointer Events del navegador) | depende del navegador; sin Chromium en la imagen |
+| PhotoCraft 0.23.1 | nativo: crate `photocraft-tablet` (XInput2 raw, hotplug) | ninguna; dibujar |
+| VectorCraft 0.24.1 | nativo: `apps/vectorcraft/src/tablet.rs` (XInput2 raw, hotplug) | ninguna; dibujar |
+| LightCraft | sin backend de tableta | puente app-level ya instalado en `/usr/bin/lightcraft` |
+| Blender 5.0.1 | nativo: XInput2 (GHOST) | abrirlo con `Lorie pen` ya presente |
+| Krita | nativo: XInput2 | ninguna |
+| Figma | web (Pointer Events del navegador) | depende del navegador |
 
-Blender y Krita no pasan por winit/egui: leen el tableta XInput2 directo. El
-guion de palma (`wtmpen guard`) sigue siendo el mismo para todas.
+- La presión viene **activada por defecto** (`use_tablet_pressure: true`).
+- PhotoCraft y VectorCraft escuchan `HIERARCHY`/`DEVICE_CHANGED`, así que el
+  lápiz puede aparecer con la app ya abierta.
 
-### Blender y Krita (XInput2 nativo)
-
-- **Krita**: ya recibe presión y tilt; no necesita nada.
-- **Blender 5.0.1**: lee el tableta XInput2 al arrancar, así que `Lorie pen`
-  debe existir **antes** de abrir Blender:
-  ```sh
-  DISPLAY=:0 xinput list --long "Lorie pen"   # debe listar Pressure/Tilt/Rotary
-  ```
-  Si no existe, haz un trazo con el S Pen en la tablet (crea el UHID) y vuelve
-  a abrir Blender. Tras reiniciar el relay, `_precreate_pen` lo crea al
-  arrancar y Blender lo ve desde el primer inicio.
-  Verificación: Sculpt (Draw) o Grease Pencil; el radio debe variar con la
-  presión. La palma la filtra `wtmpen guard`.
-- **Figma**: es web; la presión llega por Pointer Events del navegador. La
-  imagen no trae Chromium/Chrome instalado, así que Figma corre en el
-  navegador que uses (o se instala Chromium en el proot). No pasa por el
-  puente de las apps Craft.
-
-## PhotoCraft / VectorCraft: App propio en `crates/ui-egui`
-
-Cada app de la suite trae su propio `impl eframe::App` (como LightCraft), con
-el `raw_input_hook` en `crates/ui-egui/src/app.rs`; no usan el `Driver`
-compartido de `craft-ui-shell` (ese driver existe para el gallery y otros
-hosts). Por eso el parche es por app, pero automático:
+## Si el lápiz no responde
 
 ```sh
-~/.config/wtm/bin/wtm-pen-app.sh photocraft
-# clona (o reusa) el repo, localiza el raw_input_hook real,
-# copia pen_bridge.rs al crate que lo contiene, lo declara en lib.rs
-# (tras los //! del crate), añade la dep Linux y llama start()/inject()
-# en el hook; luego cargo build -p <app> e instala con backup .pre-pen
+DISPLAY=:0 xinput list --long "Lorie pen"   # debe listar Pressure/Tilt/Rotary
 ```
 
-El patcher excluye `tests/`, `target/` y el shell `*-web`, y prefiere
-`crates/ui-egui/src/app.rs`. Si el hook ya tiene `pen_bridge::inject`, no
-hace nada (idempotente).
+Si no existe, haz **un trazo con el S Pen** en la tablet (crea el UHID) y
+vuelve a la app. En Blender hay que reabrir la ventana después del trazo:
+GHOST enumera los tabletas al arrancar. Tras reiniciar el relay, la
+pre-creación lo deja listo desde el inicio.
 
-### Conflicto objc2 (por qué no va en egui-winit)
+Verificación por app:
 
-`rust-motion-tablet` 1.1 fija `objc2 =0.6.4` (solo la rama macOS) y las apps
-fijan `=0.6.5`: Cargo resuelve la rama macOS aunque compile para Linux y
-falla. El script vendoriza el crate en
-`~/artcraft-src/rust-motion-tablet-1.1.0`, relaja el pin a `0.6` (misma API;
-esa rama no se compila en Linux) y añade `[patch.crates-io]`. Es el mismo
-conflicto que cerró `storytold/egui#61`, resuelto fuera de las apps.
+- PhotoCraft: elige el pincel, baja `Size jitter`/usa presión y dibuja; el
+  tamaño cambia con la fuerza.
+- VectorCraft: igual, en el pincel de trazo.
+- LightCraft: foto → panel **Detail/Masks** → dibujar.
+- Blender: Sculpt (Draw) o Grease Pencil; el radio cambia con la presión.
+- Krita: cualquier preset con presión.
 
-### Parche compartido opcional (`craft-libs`)
+## Palma
 
-Para hosts que sí usan el driver `craft-ui-shell`, el mismo puente está
-propuesto upstream: `storytold/craft-libs#3647` (piezas
-`wtm-pen-shared.sh` y `pen_bridge_ui_shell.rs`). No es el camino de
-Photo/Vector hoy; es el que dejará el fix en la librería cuando se mergee.
+`wtmpen guard` corre en la sesión y desactiva `Lorie touch` mientras el lápiz
+está en rango (medido: 0 `TouchBegin` durante el hover). Android y el viewer
+también filtran la palma. `wtmpen status` muestra el estado.
+
+## LightCraft: único parche app-level
+
+LightCraft no trae backend de tableta, así que se le instaló el puente
+`pen_bridge` (XInput2 con `rust-motion-tablet` → `egui::Event::Touch{force}`)
+en su `raw_input_hook`. El binario instalado es `/usr/bin/lightcraft` y el
+original quedó en `/usr/bin/lightcraft.pre-pen`:
+
+```sh
+cp -p /usr/bin/lightcraft.pre-pen /usr/bin/lightcraft   # restaurar
+```
+
+El aplicador `wtm-pen-app.sh` sirve para cualquier app sin backend. **No** se
+usa en PhotoCraft/VectorCraft: duplicaría los eventos que ya entregan.
+
+## Figma
+
+Es web: la presión llega por Pointer Events del navegador. La imagen no trae
+Chromium/Chrome instalado; Figma corre en el navegador que uses (o se instala
+uno en el proot). No pasa por el puente de las apps Craft.
+
+## Historial
+
+- `storytold/lightcraft#4751`: puente app-level del POC.
+- `storytold/egui#61`: cerrado por el pin `objc2` de `rust-motion-tablet`.
+- `storytold/craft-libs#3647`: cerrado; Photo/Vector ya traen su backend y no
+  usan el driver compartido, así que ese parche no llegaba a ellas.
