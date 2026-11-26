@@ -99,3 +99,11 @@ el widget `DeX` (o `NONINTERACTIVE=1 bash ~/.shortcuts/DeX`) y, si el viewer
 quedó abierto, reconecta solo. El estado del stream se confirma con
 `logcat` del viewer (`OMX...hevc`, `first frame is available`) o con el
 healthz del relay (`scrcpy_alive: true`).
+
+## Estabilidad de la sesión (2026-11-26)
+
+La presión del lápiz en las apps depende de que la sesión Ubuntu esté sana.
+Antes de probar, ejecuta `bash ~/.config/wtm/bin/wtm-stability-check.sh`
+(PASS esperado). No arranques `wtmpen guard`: toglea `Lorie touch` y buguea
+GNOME Shell. `blur-my-shell` está desactivada por la misma razón. El mouse se
+re-enruta solo cada 60 s. Detalle y evidencia en `docs/ubuntu-s-pen.md`.

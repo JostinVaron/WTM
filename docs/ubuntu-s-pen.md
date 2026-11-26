@@ -28,7 +28,7 @@ Mouse BT   → (directo en el S25) → route-input → Lorie mouse
 - Mouse BT: ruta `TOOL_TYPE_MOUSE` independiente de `touchMode`; no se ve
   afectado.
 
-## Rechazo de palma (4 capas)
+## Rechazo de palma (3 capas activas; guard retirado)
 
 1. **Android (medido)**: mientras el stylus toca, suprime el touch
    inyectado — test stylus DOWN + swipe de dedo → **0 TouchBegin**.
@@ -38,18 +38,19 @@ Mouse BT   → (directo en el S25) → route-input → Lorie mouse
    ya apoyados. Antes la fuga era el hover estático entre trazos (>250 ms
    liberaba el táctil).
 3. **Relay**: hover (`a=7`) bloquea dedos; `HOVER_EXIT` (`a=10`) libera.
-4. **Ubuntu — `wtmpen guard`**: daemon que desactiva `Lorie touch`
-   (`xinput disable`) mientras llegan eventos del lápiz y lo reactiva tras
-   600 ms. **App-agnóstico**: cubre ArtCraft, Krita y GNOME sin tocar cada
-   app. Verificado: durante hover `Lorie touch: enabled=False`; después
-   `True`.
+4. ~~**Ubuntu — `wtmpen guard`**~~ **RETIRADO (2026-11-26)**: toglear
+   `Lorie touch` (`xinput disable/enable`) con la sesión viva dispara
+   `MetaInputDeviceX11 ... has been already disposed` en GNOME Shell
+   (`keyboard.js:1105`) y, con `blur-my-shell`, buguea el shell. La palma
+   queda cubierta por las capas 1-3. `wtmpen guard` no debe arrancarse; se
+   conserva solo como diagnóstico.
 
 ## Herramientas
 
 ```sh
 wtmpen status      # dispositivos y estado
 wtmpen test        # monitor en vivo (presión/tilt)
-wtmpen guard       # daemon de palma (se arranca con la sesión)
+wtmpen guard       # NO usar: retirado (buguea GNOME); solo diagnóstico
 wtmpen enable|disable
 ```
 
@@ -57,8 +58,8 @@ wtmpen enable|disable
 
 - Widget `~/.shortcuts/Ubuntu`: prefs (`displayScale=100`, `touchMode=1`),
   relay si falta, display virtual, `termux-x11 :0`, activity en el display,
-  sesión GNOME con verificación de estabilidad (mismo gnome-shell 4 s),
-  `wtmpen guard` y `ubuntu-watchdog`.
+  sesión GNOME con verificación de estabilidad (mismo gnome-shell 4 s) y
+  `ubuntu-watchdog`.
 - `WTM_START_APP=com.termux.x11/.MainActivity` en `server.env`: el relay
   lanza la activity al crear el display.
 - **Bus de sistema nuevo**: el socket `system-bus49` sobrevive a la sesión
@@ -89,7 +90,8 @@ wtmpen enable|disable
   `storytold/artcraft` un lector de tableta que winit no expone (crate
   `rust_motion_tablet`, o un lector XInput2 propio) y exponerlo al motor de
   pincel. Requiere **compilar** las apps; los binarios actuales no cambian.
-- La palma de ArtCraft ya está cubierta por el guard, sin tocar las apps.
+- La palma de ArtCraft está cubierta por las capas 1-3 (Android, viewer,
+  relay), sin tocar las apps; el guard de Ubuntu está retirado.
 
 ### Hallazgo de código (LightCraft clonado, 2026-11-26)
 
@@ -148,20 +150,42 @@ wtmpen enable|disable
   pipeline).
 - Latencia input→tinta dentro de Ubuntu y ground truth con cámara.
 
-## Estabilidad (2026-11-26, después de la medición)
+## Estabilidad (2026-11-26, verificado en dispositivo)
 
-- `touchMode` **3 -> 1 (Trackpad)**: Direct touch congelaba GNOME al alternar
-  dedo y lapiz en la misma ventana (varios reinicios de sesion del usuario) y
-  upstream lo describe como inestable. El dedo ahora mueve el cursor; el
-  lapiz sigue siendo puntero directo con presion; el mouse sigue siendo
-  mouse. La palma se bloquea en las 3 capas previas (Android, viewer v8,
-  relay).
-- **Guard retirado**: alternar enable/disable de `Lorie touch` con la sesion
-  viva bugea gnome-shell. `wtmpen` queda como CLI de diagnostico
-  (`status/test`), no como demon.
-- **Mouse auto-reparable**: la asociacion es per-display; dex.sh la re-aplica
-  en cada arranque y ahora tambien cuando su chequeo estricto falla con el
-  bridge vivo; el watchdog nativo verifica cada 60 s que el mouse siga
-  asociado al display scrcpy actual (`rd-route.display`) y re-asocia solo.
-- **OOM**: compilar con -j8 mato el relay con la sesion arriba. Los
-  aplicadores usan `-j3` (`WTM_CARGO_JOBS` para cambiarlo).
+### Causa raíz de los congelamientos
+
+- El **guard de palma seguía vivo** después de retirarlo del widget: el primer
+  `kill` alcanzó solo el wrapper proot y no se verificó; el python interno
+  (`python3 /usr/local/bin/wtmpen guard`) siguió togleando `Lorie touch`
+  (disable/enable) con cada evento del lápiz.
+- Ese cambio de dispositivo dispara en GNOME Shell
+  `MetaInputDeviceX11 ... has been already disposed` (`keyboard.js:1105`) y,
+  con la extensión `blur-my-shell@aunetx` v78, termina en errores de
+  `connections.js`/`popup/index.js` y shell bugueado (medido en
+  `shell49.log`, 2026-11-26 16:17 hora proot).
+- Prueba reproducible: `xinput disable/enable "Lorie touch"` ×3 → 3
+  `Gjs-CRITICAL` nuevos; sin `blur-my-shell` el shell sobrevive (ping OK).
+
+### Cambios aplicados y medidos
+
+- `blur-my-shell@aunetx` **desactivada** (`gnome-extensions disable ...`).
+  Cosmética; reactivable con `gnome-extensions enable ...` asumiendo el riesgo.
+- Guard **matado y verificado** (sin `python3 /usr/local/bin/wtmpen guard`);
+  el widget ya no lo arranca. La palma se bloquea en 3 capas: Android
+  (stylus suprime touch), viewer v8 (`penInRange`) y relay (hover).
+- `touchMode=1` (Trackpad): el dedo mueve el cursor; el lápiz sigue directo
+  con presión; el mouse sigue siendo mouse.
+- Mouse: `route-input.sh` se re-aplica **cada 60 s** de forma idempotente
+  desde el watchdog nativo (no solo al cambiar el display); marcador
+  `rd-route.display`; `dex.sh` ya no aborta antes de enrutar en arranques
+  lentos.
+- Builds `-j3` (`WTM_CARGO_JOBS`) para no disparar el OOM killer.
+
+### Prueba reproducible (sin el asistente)
+
+`bash ~/.config/wtm/bin/wtm-stability-check.sh` (Termux). Mide: healthz, X,
+GNOME por D-Bus, ausencia del guard, display scrcpy, mouse asociado,
+alternancia 3 taps touch + 3 trazos stylus con presión (conteo XI2),
+`Gjs-CRITICAL` nuevos y captura. Corrida 2026-11-26 11:36:
+**PASS=12 FAIL=0 WARN=0** (6 clicks/6 releases touch, 15 eventos de lápiz,
+0 CRITICALs nuevos, captura 1.3 MB).

@@ -163,8 +163,14 @@ for _ in $(seq 1 30); do
 done
 if [ "$ready_samples" -lt 3 ]; then
     log "No hubo 3 verificaciones consecutivas de scrcpy y bridge dentro de 30 segundos."
-    tail -n 40 "$LOG" 2>/dev/null || true
-    exit 1
+    # Arranque lento: si el bridge responde, NO abortamos antes de enrutar el
+    # mouse (el enrutado es per-display y solo se aplica aquí; saltarlo deja
+    # el mouse en la pantalla del teléfono hasta el próximo restart completo).
+    if ! bridge_up; then
+        tail -n 40 "$LOG" 2>/dev/null || true
+        exit 1
+    fi
+    log "bridge responde igual; continúo para enrutar el mouse"
 fi
 
 # --- P4 (bug b): swlan0 (hotspot) ANTES que wlan0; antes imprimia la IP del
