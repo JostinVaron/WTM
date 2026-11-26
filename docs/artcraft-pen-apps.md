@@ -22,7 +22,7 @@ dibuja.
 | PhotoCraft 0.23.1 | nativo: crate `photocraft-tablet` (XInput2 raw, hotplug) | ninguna; dibujar |
 | VectorCraft 0.24.1 | nativo: `apps/vectorcraft/src/tablet.rs` (XInput2 raw, hotplug) | ninguna; dibujar |
 | FigCraft 0.18.1 | sin backend; su pluma lee `Touch{force}` | puente instalado en `/usr/bin/figcraft` |
-| AniCraft 0.2.1 | sin backend; su tinta lee `Touch` | puente (build en curso) |
+| AniCraft 0.2.1 | sin backend; su tinta lee `Touch` | puente instalado en `/usr/bin/anicraft` |
 | DesignCraft 0.21.1 | sin herramienta de presión | puntero normal; sin puente |
 | LightCraft | sin backend de tableta | puente app-level ya instalado en `/usr/bin/lightcraft` |
 | Blender 5.0.1 | nativo: XInput2 (GHOST) | abrirlo con `Lorie pen` ya presente |
@@ -62,15 +62,16 @@ Verificación por app:
 está en rango (medido: 0 `TouchBegin` durante el hover). Android y el viewer
 también filtran la palma. `wtmpen status` muestra el estado.
 
-## LightCraft: único parche app-level
+## Apps con puente app-level
 
-LightCraft no trae backend de tableta, así que se le instaló el puente
-`pen_bridge` (XInput2 con `rust-motion-tablet` → `egui::Event::Touch{force}`)
-en su `raw_input_hook`. El binario instalado es `/usr/bin/lightcraft` y el
-original quedó en `/usr/bin/lightcraft.pre-pen`:
+LightCraft, FigCraft y AniCraft no traen backend de tableta, así que se les
+instaló el puente `pen_bridge` (XInput2 con `rust-motion-tablet` →
+`egui::Event::Touch{force}`) en su `raw_input_hook`. Cada binario conserva su
+original como `.pre-pen`:
 
 ```sh
-cp -p /usr/bin/lightcraft.pre-pen /usr/bin/lightcraft   # restaurar
+ls /usr/bin/*.pre-pen
+cp -p /usr/bin/lightcraft.pre-pen /usr/bin/lightcraft   # restaurar una
 ```
 
 El aplicador `wtm-pen-app.sh` sirve para cualquier app sin backend. **No** se
