@@ -7,6 +7,7 @@ APP="${1:?uso: wtm-pen-shared.sh <app>}"
 BASE="${WTM_APPS_SRC:-$HOME/artcraft-src}"
 SRC="$BASE/$APP"
 CL="$BASE/craft-libs"
+RMT="$BASE/rust-motion-tablet-1.1.0"
 TPL="$HOME/.config/wtm/bin/pen_bridge_ui_shell.rs"
 PATCHER="$HOME/.config/wtm/bin/wtm-pen-shared-patch.py"
 LOG="$PREFIX/tmp/wtm-pen-$APP.log"
@@ -30,14 +31,35 @@ git -C "$CL" checkout -q FETCH_HEAD
 git -C "$CL" reset -q --hard FETCH_HEAD
 git -C "$CL" clean -qfd
 
+# rust-motion-tablet 1.1 fija objc2 =0.6.4 (solo macOS), que choca con la app
+# (objc2 =0.6.5). Se vendoriza con la misma API y el pin relajado.
+if [ ! -f "$RMT/Cargo.toml" ]; then
+  RS="$PREFIX/var/lib/proot-distro/containers/ubuntu-gnome/rootfs"
+  SRC_RMT=$(ls -d "$RS"/root/.cargo/registry/src/*/rust-motion-tablet-1.1.0 2>/dev/null | head -1 || true)
+  [ -n "${SRC_RMT:-}" ] || { echo "no está rust-motion-tablet-1.1.0 en el registry; ejecuta primero el build de LightCraft"; exit 1; }
+  cp -r "$SRC_RMT" "$RMT"
+fi
+sed -i 's/^version = "=0.6.4"$/version = "0.6"/' "$RMT/Cargo.toml"
+
 python3 "$PATCHER" "$CL" "$TPL" || { echo "parche falló (ver arriba)"; exit 1; }
 
-python3 - "$SRC" "$CL" <<'PY'
+python3 - "$SRC" "$CL" "$RMT" <<'PY'
 import pathlib, re, sys
-app = pathlib.Path(sys.argv[1]); cl = pathlib.Path(sys.argv[2])
+app = pathlib.Path(sys.argv[1])
+cl = pathlib.Path(sys.argv[2])
+rmt = pathlib.Path(sys.argv[3])
 root = app / "Cargo.toml"
 s = root.read_text()
 s = re.sub(r"\n# >>> wtm-pen shared patch.*?# <<< wtm-pen shared patch\n", "\n", s, flags=re.S)
+
+# objc2: el crate vendorizado acepta 0.6 (la app fija 0.6.5).
+entry = f'rust-motion-tablet = {{ path = "{rmt}" }}'
+if "rust-motion-tablet = { path" not in s:
+    if "[patch.crates-io]" in s:
+        s = s.replace("[patch.crates-io]", "[patch.crates-io]\n" + entry, 1)
+    else:
+        s = s.rstrip() + f"\n\n[patch.crates-io]\n{entry}\n"
+
 lines = [
     "# >>> wtm-pen shared patch (craft-libs local, S Pen)",
     '[patch."https://github.com/storytold/craft-libs"]',

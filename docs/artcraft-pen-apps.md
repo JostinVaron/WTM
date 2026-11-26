@@ -74,6 +74,13 @@ Piezas: `wtm-pen-shared.sh`, `wtm-pen-shared-patch.py`,
 `git reset` de craft-libs. Para volver a la app sin lápiz:
 `cp -p /usr/bin/<app>.pre-pen /usr/bin/<app>`.
 
+`rust-motion-tablet` 1.1 fija `objc2 =0.6.4` (solo la rama macOS) y las apps
+fijan `=0.6.5`, así que Cargo no puede resolver aunque compile para Linux.
+El script vendoriza el crate en `~/artcraft-src/rust-motion-tablet-1.1.0` y
+relaja el pin a `0.6` (misma API; esa rama no se compila en Linux), y añade
+`[patch.crates-io]`. Es el mismo conflicto que cerró `storytold/egui#61`,
+resuelto aquí sin tocar las apps.
+
 PR upstream del parche compartido: `storytold/craft-libs#3647`
 (rama `JostinVaron:feat/pen-bridge`). Mientras se revisa, el script usa el
 `[patch]` local de arriba; cuando se mergee, basta subir la rev de
