@@ -89,3 +89,13 @@ uno en el proot). No pasa por el puente de las apps Craft.
 - `storytold/egui#61`: cerrado por el pin `objc2` de `rust-motion-tablet`.
 - `storytold/craft-libs#3647`: cerrado; Photo/Vector ya traen su backend y no
   usan el driver compartido, así que ese parche no llegaba a ellas.
+
+## Estabilidad (lección medida)
+
+Compilar apps grandes (FigCraft, AniCraft) con la sesión y el relay activos
+puede disparar el OOM killer y tumbar el relay (y con él el stream). No es el
+lápiz: el binario compilado queda bien. Tras un build pesado, vuelve a lanzar
+el widget `DeX` (o `NONINTERACTIVE=1 bash ~/.shortcuts/DeX`) y, si el viewer
+quedó abierto, reconecta solo. El estado del stream se confirma con
+`logcat` del viewer (`OMX...hevc`, `first frame is available`) o con el
+healthz del relay (`scrcpy_alive: true`).
