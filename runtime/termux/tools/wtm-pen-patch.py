@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Aplica el puente S Pen a una Craft app clonada.
 
-Encuentra el `raw_input_hook` real (crate `ui-egui`, no el web/test), copia
-`pen_bridge.rs` al crate que lo contiene, lo declara en el crate root, añade
-la dependencia Linux y llama `start()/inject()` al principio del hook.
+Encuentra el `raw_input_hook` real (prefiere `ui-egui`/`app.rs`, no web/tests),
+copia `pen_bridge.rs` al crate que lo contiene, lo declara en el crate root
+(tras los `//!`), añade la dependencia Linux y llama `start()/inject()` al
+principio del hook. Si el hook ya está parcheado, solo completa lo que falte
+(módulo, declaración y dependencia): es reparable e idempotente.
 
 Uso: wtm-pen-patch.py <repo> <pen_bridge.rs>
-Idempotente: si el hook ya tiene `pen_bridge::inject`, no cambia nada.
 """
 import pathlib
 import re
@@ -19,6 +20,7 @@ tpl = pathlib.Path(sys.argv[2])
 
 skip = {"target", "tests", "test", "benches", "examples"}
 hooks = []
+already = []
 for p in root.rglob("*.rs"):
     if skip & set(p.parts):
         continue
@@ -28,38 +30,40 @@ for p in root.rglob("*.rs"):
         continue
     if "fn raw_input_hook" not in txt:
         continue
-    if "pen_bridge::inject" in txt:
-        print(f"ya parcheado: {p}")
-        sys.exit(0)
-    hooks.append(p)
+    (already if "pen_bridge::inject" in txt else hooks).append(p)
 
-if not hooks:
-    sys.exit("no encuentro raw_input_hook en el repo")
+if already:
+    p = already[0]
+    print(f"ya parcheado: {p}")
+elif hooks:
+    def score(p: pathlib.Path) -> tuple:
+        s = str(p)
+        return (
+            "/apps/" not in s,
+            "-web" not in s,
+            "ui-egui" in s,
+            "app.rs" in s,
+        )
 
-
-def score(p: pathlib.Path) -> tuple:
-    s = str(p)
-    return (
-        "/apps/" not in s,      # las apps son wrappers; el App vive en crates/
-        "-web" not in s,        # el shell web no es el nativo
-        "ui-egui" in s,         # el crate de UI de la suite
-        "app.rs" in s,          # el App nativo
+    hooks.sort(key=score, reverse=True)
+    p = hooks[0]
+    txt = p.read_text()
+    m = re.search(
+        r"fn raw_input_hook\s*\(&mut self,[^)]*?([A-Za-z_]\w*)\s*:\s*&mut\s+([^)]*RawInput)\)\s*\{",
+        txt,
     )
-
-
-hooks.sort(key=score, reverse=True)
-p = hooks[0]
-txt = p.read_text()
-m = re.search(
-    r"fn raw_input_hook\s*\(&mut self,[^)]*?([A-Za-z_]\w*)\s*:\s*&mut\s+([^)]*RawInput)\)\s*\{",
-    txt,
-)
-if not m:
-    sys.exit(f"{p}: no pude leer la firma del raw_input_hook")
-param = m.group(1)
-txt = txt[: m.end()] + f"\n        crate::pen_bridge::start();\n        crate::pen_bridge::inject({param});" + txt[m.end() :]
-p.write_text(txt)
-print(f"hook parcheado: {p} (raw = {param})")
+    if not m:
+        sys.exit(f"{p}: no pude leer la firma del raw_input_hook")
+    param = m.group(1)
+    txt = (
+        txt[: m.end()]
+        + f"\n        crate::pen_bridge::start();\n        crate::pen_bridge::inject({param});"
+        + txt[m.end() :]
+    )
+    p.write_text(txt)
+    print(f"hook parcheado: {p} (raw = {param})")
+else:
+    sys.exit("no encuentro raw_input_hook en el repo")
 
 # El crate que contiene el hook.
 crate = p.parent
@@ -95,7 +99,21 @@ if "mod pen_bridge;" not in s:
 
 cargo = crate / "Cargo.toml"
 s = cargo.read_text()
-if "rust-motion-tablet" not in s:
+
+
+def declares_dep(txt: str) -> bool:
+    """¿Hay una dependencia real, fuera de las tablas [patch*]?"""
+    in_patch = False
+    for ln in txt.splitlines():
+        st = ln.strip()
+        if st.startswith("["):
+            in_patch = st.startswith("[patch")
+        elif not in_patch and re.match(r"^rust-motion-tablet\s*=", st):
+            return True
+    return False
+
+
+if not declares_dep(s):
     target = "[target.'cfg(target_os = \"linux\")'.dependencies]"
     if target in s:
         s = s.replace(target, target + "\nrust-motion-tablet = \"1.1\"", 1)
