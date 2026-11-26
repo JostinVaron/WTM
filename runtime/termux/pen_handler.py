@@ -334,6 +334,9 @@ def _handle(state, data):
         # rango YA: mientras siga en rango, Android suprime tactil y mouse
         # en el display virtual (igual que una Galaxy Tab real con EMR).
         if act == 10:
+            # La pluma salio del digitizador: se acaba el bloqueo de dedos y
+            # la pluma sale de rango al instante.
+            _stylus_active_until = 0.0
             _cancel_oor()
             if _uhid_ready and _uhid_session == getattr(
                     srv, "_scrcpy_session", -1):
@@ -349,8 +352,9 @@ def _handle(state, data):
             _cancel_oor()
         elif act in (1, 3, 7):
             _schedule_oor(srv)
-        # Solo el contacto (down/move/up) bloquea dedos; el hover no.
-        if act in (0, 1, 2, 3):
+        # La pluma EN RANGO (contacto o hover) bloquea dedos; el HOVER_EXIT
+        # (act 10) lo libera. Asi la palma apoyada entre trazos no pasa.
+        if act in (0, 1, 2, 3, 7):
             _stylus_active_until = time.monotonic() + _palm_window()
         p = float(data.get("p", 1.0))
         if not math.isfinite(p) or p < 0.0:

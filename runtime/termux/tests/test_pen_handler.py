@@ -238,6 +238,24 @@ class DispatchTest(unittest.TestCase):
                                          "tool": "palm"})
         self.assertEqual(self.srv.scrcpy_control.sent, [])
 
+    def test_hover_in_range_blocks_fingers_and_exit_releases(self):
+        # Pluma en hover (en rango) -> el dedo/palma se rechaza.
+        pen_handler._handle(self.state, {"a": 7, "pid": 0, "x": 10, "y": 20,
+                                         "p": 0.0, "pt": "stylus"})
+        before = len(self.srv.scrcpy_control.sent)
+        pen_handler._handle(self.state, {"a": 0, "pid": 2, "x": 5, "y": 6,
+                                         "p": 0.5, "pt": "finger"})
+        self.assertEqual(len(self.srv.scrcpy_control.sent), before)
+        # HOVER_EXIT -> el dedo vuelve a pasar.
+        pen_handler._handle(self.state, {"a": 10, "pid": 0, "x": 10, "y": 20,
+                                         "p": 0.0, "pt": "stylus"})
+        before = len(self.srv.scrcpy_control.sent)
+        pen_handler._handle(self.state, {"a": 0, "pid": 2, "x": 5, "y": 6,
+                                         "p": 0.5, "pt": "finger"})
+        self.assertEqual(len(self.srv.scrcpy_control.sent), before + 1)
+        self.assertEqual(self.srv.scrcpy_control.sent[-1][0],
+                         server.CTRL_TYPE_INJECT_TOUCH)
+
     def test_finger_while_stylus_active_is_dropped_and_released(self):
         # un dedo ya abajo
         pen_handler._handle(self.state, {"a": 0, "pid": 2, "x": 5, "y": 6,
