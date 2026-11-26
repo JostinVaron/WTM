@@ -175,10 +175,12 @@ wtmpen enable|disable
   (stylus suprime touch), viewer v8 (`penInRange`) y relay (hover).
 - `touchMode=1` (Trackpad): el dedo mueve el cursor; el lápiz sigue directo
   con presión; el mouse sigue siendo mouse.
-- Mouse: `route-input.sh` se re-aplica **cada 60 s** de forma idempotente
-  desde el watchdog nativo (no solo al cambiar el display); marcador
-  `rd-route.display`; `dex.sh` ya no aborta antes de enrutar en arranques
-  lentos.
+- Mouse: el watchdog **verifica cada 60 s en modo read-only** el `DisplayId`
+  real del mouse (`dumpsys input`, parser `mouse_display`); solo re-aplica
+  `route-input.sh` si el display virtual cambió o si el mouse declara otro
+  display. No se re-aplica una asociación sana: hacerlo cada minuto podía
+  interferir con el ratón en uso. Marcador `rd-route.display`; `dex.sh` ya
+  no aborta antes de enrutar en arranques lentos.
 - Builds `-j3` (`WTM_CARGO_JOBS`) para no disparar el OOM killer.
 
 ### Prueba reproducible (sin el asistente)
@@ -186,6 +188,7 @@ wtmpen enable|disable
 `bash ~/.config/wtm/bin/wtm-stability-check.sh` (Termux). Mide: healthz, X,
 GNOME por D-Bus, ausencia del guard, display scrcpy, mouse asociado,
 alternancia 3 taps touch + 3 trazos stylus con presión (conteo XI2),
-`Gjs-CRITICAL` nuevos y captura. Corrida 2026-11-26 11:36:
-**PASS=12 FAIL=0 WARN=0** (6 clicks/6 releases touch, 15 eventos de lápiz,
-0 CRITICALs nuevos, captura 1.3 MB).
+`Gjs-CRITICAL` nuevos y captura. Corrida 2026-11-26 12:06 (tras la limpieza
+de bloatware): **PASS=12 FAIL=0 WARN=0** (6 clicks/6 releases touch, 15
+eventos de lápiz, 0 CRITICALs nuevos, captura 1.3 MB). Limpieza y
+rendimiento: `docs/ubuntu-performance-cleanup.md`.
