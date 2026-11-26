@@ -895,6 +895,27 @@ def _relaunch_scrcpy():
         print(f"[scrcpy] no se pudo relanzar: {exc}", flush=True)
 
 
+async def _precreate_pen(state):
+    """Crea el UHID de la pluma apenas hay tamano de video.
+
+    Termux:X11 solo expone Lorie pen/eraser si detecta un stylus al arrancar
+    la activity. Sin esto, tras recrear el display (reinicio del relay) el
+    primer trazo puede perderse y el lapiz tarda en aparecer. Es idempotente.
+    """
+    import pen_handler
+    for _ in range(40):
+        w = int(getattr(state, "scrcpy_w", 0))
+        h = int(getattr(state, "scrcpy_h", 0))
+        if w > 0 and h > 0 and scrcpy_control.writer is not None:
+            try:
+                pen_handler._ensure(state)
+                print("[pen] UHID precreado para el display virtual", flush=True)
+            except Exception as exc:
+                print(f"[pen] precreate: {exc}", flush=True)
+            return
+        await asyncio.sleep(0.25)
+
+
 async def scrcpy_reader(state):
     """Read a raw Annex-B H.264 stream from scrcpy-server (the whole S25 screen) and
     republish it as AVCC access units over WebSocket to the tablet client."""
@@ -930,6 +951,8 @@ async def scrcpy_reader(state):
             if start_app:
                 scrcpy_control.send(ctrl_start_app(start_app))
                 print(f"[scrcpy] START_APP {start_app} (display virtual)", flush=True)
+            # Pre-crear el UHID para que la activity vea el stylus al arrancar.
+            asyncio.create_task(_precreate_pen(state))
         try:
             while True:
                 chunk = await reader.read(262144)

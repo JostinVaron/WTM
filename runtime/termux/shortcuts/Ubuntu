@@ -1,0 +1,113 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Ubuntu: arranca Termux:X11 + GNOME del proot en el display virtual WTM.
+# Idempotente: si ya esta todo, no reinicia nada. Widget de Termux:Widget.
+set -uo pipefail
+export PATH=/data/data/com.termux/files/usr/bin:/system/bin:/system/xbin
+export HOME=/data/data/com.termux/files/home
+export PREFIX=/data/data/com.termux/files/usr
+
+ADB="$PREFIX/bin/adb"
+PHONE="${WTM_PHONE_ADB:-127.0.0.1:5555}"
+LOG="$PREFIX/tmp/rd-ubuntu.log"
+RT="$PREFIX/tmp/rt-dex"
+DISPLAY_NUM=":0"
+mkdir -p "$RT"
+exec >>"$LOG" 2>&1
+
+log(){ printf '[ubuntu] %s %s\n' "$(date '+%F %T')" "$*"; }
+toast(){ timeout 4 termux-toast -g top "$1" >/dev/null 2>&1 || true; }
+inproot(){ proot-distro login ubuntu-gnome --shared-tmp -- bash -c "$1" 2>/dev/null; }
+
+log "=== Ubuntu start ==="
+
+# 1. Preferencias fijas: 2000x1200 exacto y touch directo (multi-touch real).
+termux-x11-preference displayScale:100 touchMode:3 >/dev/null 2>&1 || true
+
+# 2. Relay WTM (si esta caido, el wizard DeX lo levanta en modo no interactivo).
+if ! curl -sk --max-time 3 "https://127.0.0.1:8443/healthz" 2>/dev/null | grep -q '"ok": *true'; then
+  log "relay caido -> wizard DeX"
+  WTM_WIZARD_NONINTERACTIVE=1 bash "$HOME/.shortcuts/DeX" >>"$LOG" 2>&1 || true
+fi
+
+# 3. Display virtual scrcpy.
+DID=$("$ADB" -s "$PHONE" shell dumpsys display 2>/dev/null | tr -d '\r' \
+  | grep -oE "displayId=[0-9]+, uniqueId='virtual:[^']*scrcpy[^']*'" \
+  | head -1 | grep -oE '[0-9]+' | head -1)
+if [ -z "$DID" ]; then
+  log "sin display scrcpy"
+  toast "Ubuntu: arranca DeX primero"
+  exit 1
+fi
+log "display virtual=$DID"
+
+# 4. Servidor X (proceso aparte del activity; el socket aparece al conectar).
+if ! pgrep -f 'termux-x11 com.termux.x11' >/dev/null 2>&1; then
+  log "arrancando termux-x11 :0"
+  nohup termux-x11 "$DISPLAY_NUM" >"$RT/x11-server.log" 2>&1 &
+fi
+
+# 5. Activity de Termux:X11 en el display virtual (idempotente).
+"$ADB" -s "$PHONE" shell "am start --display $DID -n com.termux.x11/.MainActivity" >/dev/null 2>&1 || true
+for _ in $(seq 1 20); do [ -S "$PREFIX/tmp/.X11-unix/X0" ] && break; sleep 1; done
+if [ ! -S "$PREFIX/tmp/.X11-unix/X0" ]; then
+  log "socket X0 no aparecio"
+  toast "Ubuntu: X server no arranco; mira rd-ubuntu.log"
+  exit 1
+fi
+
+# 6. Sesion GNOME del proot.
+if ! inproot 'pgrep -x gnome-shell >/dev/null'; then
+  log "arrancando sesion GNOME (bus nuevo)"
+  # El socket system-bus49 sobrevive a la sesion, pero el dbus-daemon y el
+  # fake-logind mueren con el namespace del proot: reutilizarlo da
+  # "Connection refused" en LoginManagerSystemd y gnome-shell crashea
+  # (medido 2026-11-26). Por eso: bus SIEMPRE nuevo en sesion muerta.
+  OLD=$(ps -eo pid,args | awk '
+    $2 == "dbus-daemon" && $0 ~ /system-dbus49/ {print $1}
+    $2 == "python3" && ($3 ~ /fake-login1\.py$/ || $3 ~ /nm-stub\.py$/ || $3 ~ /upower-stub\.py$/) {print $1}
+  ')
+  [ -n "$OLD" ] && kill $OLD 2>/dev/null
+  rm -f "$RT/system-bus49" "$RT/session.stop" "$RT/shell49.pid" "$RT/login1.pid" \
+        "$RT/nm-stub.pid" "$RT/upowerd.pid" "$RT/gsd-"*.pid 2>/dev/null
+  nohup proot-distro login ubuntu-gnome --shared-tmp -- \
+    bash -c 'exec bash /usr/local/bin/gnome-moderno.sh' \
+    >>"$RT/ubuntu-session.log" 2>&1 &
+fi
+
+# 7. Verificacion: mismo gnome-shell vivo tras 4 s + pantalla 2000x1200.
+OK=0
+for _ in $(seq 1 30); do
+  P1=$(inproot 'pgrep -x gnome-shell | head -1')
+  if [ -n "$P1" ] && inproot 'DISPLAY=:0 xdpyinfo 2>/dev/null | grep -q "2000x1200"'; then
+    sleep 4
+    P2=$(inproot 'pgrep -x gnome-shell | head -1')
+    if [ -n "$P2" ] && [ "$P1" = "$P2" ]; then OK=1; break; fi
+  fi
+  sleep 2
+done
+if [ "$OK" = 1 ]; then
+  # Herramientas del lapiz (deploy idempotente en el proot).
+  if ! inproot 'command -v wtmpen >/dev/null'; then
+    proot-distro login ubuntu-gnome --shared-tmp -- \
+      bash -c 'cat > /usr/local/bin/wtmpen && chmod 755 /usr/local/bin/wtmpen' \
+      < "$HOME/.config/wtm/bin/wtmpen" 2>/dev/null || true
+  fi
+  # Guard de palma app-agnostico (deshabilita Lorie touch mientras hay lapiz).
+  if ! pgrep -f 'wtmpen guard' >/dev/null; then
+    log "arrancando wtmpen guard"
+    nohup proot-distro login ubuntu-gnome --shared-tmp -- \
+      bash -c 'DISPLAY=:0 exec wtmpen guard' >>"$RT/wtmpen.log" 2>&1 &
+  fi
+  # Watchdog: relanza la activity si LMKD la mata y protege app/server.
+  if ! pgrep -f 'ubuntu-watchdog.sh' >/dev/null; then
+    log "arrancando ubuntu-watchdog"
+    nohup bash "$HOME/.config/wtm/bin/ubuntu-watchdog.sh" \
+      >>"$RT/ubuntu-watchdog.log" 2>&1 &
+  fi
+  log "Ubuntu listo (display $DID, 2000x1200, GNOME $P2)"
+  toast "Ubuntu listo: S Pen y touch en la tablet"
+  exit 0
+fi
+log "timeout esperando GNOME estable"
+toast "Ubuntu: GNOME no arranco; mira rd-ubuntu.log"
+exit 1
