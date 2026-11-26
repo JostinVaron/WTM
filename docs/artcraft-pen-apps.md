@@ -21,6 +21,9 @@ dibuja.
 |---|---|---|
 | PhotoCraft 0.23.1 | nativo: crate `photocraft-tablet` (XInput2 raw, hotplug) | ninguna; dibujar |
 | VectorCraft 0.24.1 | nativo: `apps/vectorcraft/src/tablet.rs` (XInput2 raw, hotplug) | ninguna; dibujar |
+| FigCraft 0.18.1 | sin backend; su pluma lee `Touch{force}` | puente instalado en `/usr/bin/figcraft` |
+| AniCraft 0.2.1 | sin backend; su tinta lee `Touch` | puente (build en curso) |
+| DesignCraft 0.21.1 | sin herramienta de presión | puntero normal; sin puente |
 | LightCraft | sin backend de tableta | puente app-level ya instalado en `/usr/bin/lightcraft` |
 | Blender 5.0.1 | nativo: XInput2 (GHOST) | abrirlo con `Lorie pen` ya presente |
 | Krita | nativo: XInput2 | ninguna |
@@ -36,13 +39,16 @@ dibuja.
 DISPLAY=:0 xinput list --long "Lorie pen"   # debe listar Pressure/Tilt/Rotary
 ```
 
-Si no existe, haz **un trazo con el S Pen** en la tablet (crea el UHID) y
-vuelve a la app. En Blender hay que reabrir la ventana después del trazo:
+Validado: tras reiniciar relay + widget `Ubuntu`, `Lorie pen` existe desde el
+arranque (la pre-creación UHID ocurre antes de lanzar la activity). Sin
+reinicio completo, el primer trazo con el S Pen lo crea. En Blender hay que reabrir la ventana después del trazo:
 GHOST enumera los tabletas al arrancar. Tras reiniciar el relay, la
 pre-creación lo deja listo desde el inicio.
 
 Verificación por app:
 
+- FigCraft: herramienta Pluma/Pencil; FigCraft lee `Touch{force}` y su perfil
+  de presión cambia el ancho del trazo.
 - PhotoCraft: elige el pincel, baja `Size jitter`/usa presión y dibuja; el
   tamaño cambia con la fuerza.
 - VectorCraft: igual, en el pincel de trazo.
