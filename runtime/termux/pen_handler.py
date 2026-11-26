@@ -352,9 +352,10 @@ def _handle(state, data):
             _cancel_oor()
         elif act in (1, 3, 7):
             _schedule_oor(srv)
-        # La pluma EN RANGO (contacto o hover) bloquea dedos; el HOVER_EXIT
-        # (act 10) lo libera. Asi la palma apoyada entre trazos no pasa.
-        if act in (0, 1, 2, 3, 7):
+        # Solo la pluma TOCANDO bloquea dedos; el hover (act 7) no. Asi el
+        # dedo sigue funcionando mientras el S Pen sobrevuela, como en una
+        # Galaxy Tab; la palma se filtra por TOOL_TYPE_PALM/cancel.
+        if act in (0, 1, 2, 3):
             _stylus_active_until = time.monotonic() + _palm_window()
         p = float(data.get("p", 1.0))
         if not math.isfinite(p) or p < 0.0:

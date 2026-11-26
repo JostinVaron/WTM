@@ -178,9 +178,9 @@ class PenForwarder(
                         if (!penInRange) Log.d("WTM", "penInRange=true (hover)")
                         penInRange = true
                         lastPenEventAt = SystemClock.elapsedRealtime()
-                        // Si la palma ya estaba apoyada cuando entra la pluma,
-                        // se cancela AHORA (EMR real: la palma no debe quedar).
-                        releaseActiveFingers()
+                        // El hover solo mueve el puntero de la pluma; NO cancela
+                        // dedos deliberados. La palma se cancela cuando la pluma
+                        // TOCA (stylusTouching), como en una Galaxy Tab real.
                         emit(ev, i, -1, 7, sw, sh)
                     }
                 }
@@ -245,16 +245,16 @@ class PenForwarder(
 
         val pid = ev.getPointerId(i)
 
-        // Politica stylus-activo: mientras la pluma esta EN RANGO (hover o
-        // contacto) o dentro de la ventana de 250 ms, los dedos no llegan al
-        // S25. Un dedo ya abajo se cancela una vez. Timeout de seguridad por
-        // si HOVER_EXIT se pierde: nunca dejar el tactil bloqueado para siempre.
+        // Politica stylus-activo: solo mientras la pluma TOCA (o 250 ms
+        // despues) se rechazan dedos. El hover de la pluma NO bloquea el
+        // tactil: en una Galaxy Tab el dedo sigue funcionando mientras el
+        // S Pen sobrevuela. La palma se filtra por TOOL_TYPE_PALM/cancel.
         val now = SystemClock.elapsedRealtime()
         if (penInRange && now - lastPenEventAt > PEN_RANGE_TIMEOUT_MS) {
             penInRange = false
             Log.d("WTM", "penInRange=false (timeout)")
         }
-        if (finger && (penInRange || now < stylusActiveUntil)) {
+        if (finger && now < stylusActiveUntil) {
             activeFingers.remove(pid)?.let { xy ->
                 send("{\"t\":\"pu\",\"a\":3,\"pid\":$pid," +
                     "\"x\":${xy.first},\"y\":${xy.second}," +

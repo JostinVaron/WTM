@@ -39,14 +39,16 @@ while true; do
     [ -n "$p" ] && echo 0 > "/proc/$p/oom_score_adj" 2>/dev/null
   done
 
-  DID=$("$ADB" -s "$PHONE" shell dumpsys display 2>/dev/null | tr -d '\r' \
-    | grep -oE "displayId=[0-9]+, uniqueId='virtual:[^']*scrcpy[^']*'" \
-    | head -1 | grep -oE '[0-9]+' | head -1)
-  if [ -n "$DID" ]; then
-    if ! "$ADB" -s "$PHONE" shell dumpsys window displays 2>/dev/null \
-        | tr -d '\r' | grep -A25 "mDisplayId=$DID" \
-        | grep -q 'com.termux.x11'; then
-      log "activity ausente en display $DID; relanzando"
+  # Solo relanzar si el PROCESO de la app murio (LMKD/OOM). Si el usuario
+  # minimizo la activity, el proceso sigue vivo y NO se roba el foco.
+  # (2026-11-26: el chequeo por ventana relanzaba cada 5 s al minimizar.)
+  # Para recuperar una activity viva pero oculta, toca el widget Ubuntu.
+  if [ -z "$APP_PIDS" ]; then
+    DID=$("$ADB" -s "$PHONE" shell dumpsys display 2>/dev/null | tr -d '\r' \
+      | grep -oE "displayId=[0-9]+, uniqueId='virtual:[^']*scrcpy[^']*'" \
+      | head -1 | grep -oE '[0-9]+' | head -1)
+    if [ -n "$DID" ]; then
+      log "proceso Termux:X11 muerto; relanzando en display $DID"
       "$ADB" -s "$PHONE" shell \
         "am start --display $DID -n com.termux.x11/.MainActivity" >/dev/null 2>&1 || true
     fi
