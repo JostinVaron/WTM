@@ -91,6 +91,23 @@ wtmpen enable|disable
   pincel. Requiere **compilar** las apps; los binarios actuales no cambian.
 - La palma de ArtCraft ya está cubierta por el guard, sin tocar las apps.
 
+### Hallazgo de código (LightCraft clonado, 2026-11-26)
+
+- La app **ya tiene el camino de presión**:
+  `crates/ui-egui/src/panels/detail/masks.rs::pen_force()` lee
+  `egui::Event::Touch { force }`; `brush_live.rs` aplica
+  `pressure_radius/pressure_flow` por muestra.
+- En Linux **winit no emite ningún evento de stylus** (ni puntero ni
+  touch), así que `pen_force` devuelve `None` y el pincel va a presión
+  plena. En Windows sí llega como touch force.
+- Arquitectura compartida: las craft apps usan el **fork `storytold/egui`**
+  (`egui-winit`) y `storytold/craft-libs`; el parche va **una vez** en esa
+  capa de eventos común (inyectar `egui::Event::Touch` con `force` desde
+  XInput2/`rust_motion_tablet`, y los eventos de puntero), no en cada app.
+- Los repos son públicos y activos; la cuenta actual solo tiene `pull` en
+  `storytold/artcraft`. El camino es fork + PR + build en su CI; compilar
+  la suite en el teléfono no es viable.
+
 ## Pendiente medido
 
 - Verificación con S Pen real en Krita (tu prueba).
